@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    allowedHosts: ["infiltre.traillearn.org"],
     proxy: {
       "/socket.io": "http://localhost:3000",
       "/health": "http://localhost:3000"
