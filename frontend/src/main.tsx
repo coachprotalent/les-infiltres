@@ -35,6 +35,7 @@ function App() {
 
   useEffect(() => {
     const leaveRoom = (message?: string) => {
+      localStorage.removeItem(sessionKey);
       localStorage.removeItem(roomKey);
       setView(null);
       if (message) setToast(message);
@@ -110,6 +111,7 @@ function App() {
   }
 
   const leaveRoom = () => {
+    localStorage.removeItem(sessionKey);
     localStorage.removeItem(roomKey);
     setView(null);
   };
@@ -149,6 +151,16 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
     localStorage.setItem("les-infiltres-voice", next ? "on" : "off");
     if (!next && "speechSynthesis" in window) window.speechSynthesis.cancel();
   };
+  const quit = () => {
+    const label = view.phase === "LOBBY" ? "Quitter le salon" : "Quitter la partie";
+    const hostLobby = view.phase === "LOBBY" && !!you?.isHost;
+    const message = hostLobby
+      ? "Vous etes l'hote. Quitter transferera le salon au prochain joueur, ou fermera le salon si vous etes seul. Continuer ?"
+      : `${label} ?`;
+    if (!window.confirm(message)) return;
+    socket.emit("leaveRoom", { code: view.code });
+    onLeaveRoom();
+  };
 
   const timer = getTimerInfo(view, now);
   const mayor = view.players.find((player) => player.id === view.mayorId);
@@ -176,6 +188,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
           </div>
           <button className={voiceEnabled ? "voice-on" : ""} onClick={toggleVoice}>{voiceEnabled ? "Voix active" : "Activer voix"}</button>
         </div>
+        {you && <button className="danger" onClick={quit}>{view.phase === "LOBBY" ? "Quitter le salon" : "Quitter la partie"}</button>}
         {mayor && <p className="mayor-line"><Crown size={16} /> Maire : {mayor.name}</p>}
         {timer && <PhaseTimer timer={timer} />}
         {you && !you.alive && <p className="spectator-line">Vous etes spectateur : vous voyez les debats sans voter, parler ni agir.</p>}

@@ -145,6 +145,7 @@ export type ClientToServerEvents = {
   updateConfig: (payload: { code: string; config: Partial<GameConfig> }) => void;
   updateAudioMode: (payload: { code: string; audioMode: AudioMode }) => void;
   closeRoom: (payload: { code: string }) => void;
+  leaveRoom: (payload: { code: string }) => void;
   startGame: (payload: { code: string }) => void;
   electMayor: (payload: { code: string; targetId: string }) => void;
   adminNext: (payload: { code: string }) => void;

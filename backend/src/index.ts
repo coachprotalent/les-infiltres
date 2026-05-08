@@ -60,6 +60,7 @@ io.on("connection", (socket) => {
   socket.on("updateConfig", ({ code, config }) => store.updateConfig(code, socket.id, config));
   socket.on("updateAudioMode", ({ code, audioMode }) => store.updateAudioMode(code, socket.id, audioMode));
   socket.on("closeRoom", ({ code }) => store.closeRoom(code, socket.id));
+  socket.on("leaveRoom", ({ code }) => store.leaveRoom(code, socket.id));
   socket.on("startGame", ({ code }) => store.startGame(code, socket.id));
   socket.on("electMayor", ({ code, targetId }) => store.electMayor(code, socket.id, targetId));
   socket.on("adminNext", ({ code }) => store.adminNext(code, socket.id));

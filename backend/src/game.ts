@@ -164,6 +164,21 @@ export class GameStore {
     }
   }
 
+  leaveRoom(code: string, actorSocketId: string) {
+    const room = this.getRoom(code);
+    const player = room?.players.find((p) => p.socketId === actorSocketId);
+    if (!room || !player) return this.reject(actorSocketId, "Partie introuvable.");
+    if (room.phase === "LOBBY") return this.leaveLobby(room, player);
+    player.connected = false;
+    player.socketId = undefined;
+    player.audioActive = false;
+    if (player.alive) this.eliminate(room, player, "depart");
+    room.narrator = `${player.name} a quitte la partie.`;
+    this.log(room, "system", `${player.name} quitte volontairement la partie.`);
+    this.checkWin(room);
+    this.emit(room);
+  }
+
   updateConfig(code: string, actorSocketId: string, config: Partial<GameConfig>) {
     const room = this.requireHost(code, actorSocketId);
     if (!room) return;
@@ -199,6 +214,28 @@ export class GameStore {
     const sockets = room.players.flatMap((player) => (player.socketId ? [player.socketId] : []));
     this.rooms.delete(room.code);
     for (const socketId of sockets) this.onClose(socketId, "Le salon a ete ferme par l'hote.");
+  }
+
+  private leaveLobby(room: Room, player: Player) {
+    const leavingSocketId = player.socketId;
+    room.players = room.players.filter((candidate) => candidate.id !== player.id);
+    if (!room.players.length) {
+      this.rooms.delete(room.code);
+      if (leavingSocketId) this.onClose(leavingSocketId, "Vous avez quitte le salon.");
+      return;
+    }
+    if (player.id === room.hostId) {
+      room.hostId = room.players[0].id;
+      player.isHost = false;
+      room.players[0].isHost = true;
+      room.narrator = `${player.name} a quitte le salon. ${room.players[0].name} devient hote.`;
+      this.log(room, "system", `${player.name} quitte le salon. Hote transfere a ${room.players[0].name}.`);
+    } else {
+      room.narrator = `${player.name} a quitte le salon.`;
+      this.log(room, "system", `${player.name} quitte le salon.`);
+    }
+    if (leavingSocketId) this.onClose(leavingSocketId, "Vous avez quitte le salon.");
+    this.emit(room);
   }
 
   startGame(code: string, actorSocketId: string) {
@@ -640,7 +677,7 @@ export class GameStore {
     this.emit(room);
   }
 
-  private eliminate(room: Room, player: Player, reason: "vote" | "nuit") {
+  private eliminate(room: Room, player: Player, reason: "vote" | "nuit" | "depart") {
     player.alive = false;
     player.canVote = false;
     player.canSpeak = false;
@@ -649,7 +686,8 @@ export class GameStore {
     player.revealedRole = player.role;
     player.muted = room.audioMode === "integrated" ? !room.config.deadCanHearAudio : player.muted;
     if (player.id === room.mayorId) room.mayorId = this.pickNextMayor(room);
-    this.log(room, "elimination", `${player.name} elimine par ${reason}. Role revele : ${ROLE_LABELS[player.role ?? "Croyant"]}.`);
+    const label = reason === "depart" ? "depart volontaire" : reason;
+    this.log(room, "elimination", `${player.name} elimine par ${label}. Role revele : ${ROLE_LABELS[player.role ?? "Croyant"]}.`);
   }
 
   private checkWin(room: Room) {
