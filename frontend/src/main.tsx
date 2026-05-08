@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { io, Socket } from "socket.io-client";
-import { Clock, Copy, Crown, Gavel, Mic, MicOff, Moon, Play, Settings, Shield, Sun, Users, Vote } from "lucide-react";
-import type { ClientToServerEvents, GameConfig, Role, RoomView, ServerToClientEvents } from "@les-infiltres/shared";
+import { ArrowLeft, Clock, Copy, Crown, Eye, Gavel, Lock, LogOut, Mic, MicOff, Moon, Play, RefreshCw, Settings, Shield, Sun, Trash2, Users, Vote } from "lucide-react";
+import type { AdminRoomDetails, AdminRoomSummary, ClientToServerEvents, GameConfig, Role, RoomView, ServerToClientEvents } from "@les-infiltres/shared";
 import { DEFAULT_CONFIG, ROLE_ABILITIES, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLES, mergeConfig } from "@les-infiltres/shared";
 import "./styles.css";
 
@@ -24,6 +24,7 @@ type TimerInfo = {
 const socket: AppSocket = io("/", { autoConnect: true });
 const sessionKey = "les-infiltres-session";
 const roomKey = "les-infiltres-room";
+const adminTokenKey = "les-infiltres-admin-token";
 
 function App() {
   const [view, setView] = useState<RoomView | null>(null);
@@ -32,6 +33,7 @@ function App() {
   const [code, setCode] = useState("");
   const [audioMode, setAudioMode] = useState<"integrated" | "external">("external");
   const [config, setConfig] = useState<GameConfig>(DEFAULT_CONFIG);
+  const [adminOpen, setAdminOpen] = useState(false);
 
   useEffect(() => {
     const leaveRoom = (message?: string) => {
@@ -81,6 +83,7 @@ function App() {
   };
 
   if (!view) {
+    if (adminOpen) return <AdminPage onBack={() => setAdminOpen(false)} />;
     return (
       <main className="shell home">
         <section className="brand">
@@ -103,6 +106,7 @@ function App() {
             <input value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="CODE" maxLength={5} />
             <button onClick={join}>Rejoindre</button>
           </div>
+          <button className="admin-link" onClick={() => setAdminOpen(true)}><Lock size={16} /> Administration</button>
           {toast && <p className="toast">{toast}</p>}
           <p className="muted">Le choix audio ne bloque jamais la creation du salon. Le micro se teste apres creation, dans le lobby.</p>
         </section>
@@ -117,6 +121,170 @@ function App() {
   };
 
   return <Game view={view} toast={toast} onToast={setToast} onLeaveRoom={leaveRoom} />;
+}
+
+function AdminPage({ onBack }: { onBack: () => void }) {
+  const [token, setToken] = useState(() => sessionStorage.getItem(adminTokenKey) ?? "");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [rooms, setRooms] = useState<AdminRoomSummary[]>([]);
+  const [details, setDetails] = useState<AdminRoomDetails | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const loadRooms = (activeToken = token) => {
+    if (!activeToken) return;
+    setLoading(true);
+    socket.emit("adminListRooms", { token: activeToken }, (result) => {
+      setLoading(false);
+      if (!result.ok) {
+        sessionStorage.removeItem(adminTokenKey);
+        setToken("");
+        setRooms([]);
+        setDetails(null);
+        return setMessage(result.error);
+      }
+      setRooms(result.rooms);
+      setMessage("");
+    });
+  };
+
+  useEffect(() => {
+    if (token) loadRooms(token);
+  }, [token]);
+
+  const login = (event: React.FormEvent) => {
+    event.preventDefault();
+    setLoading(true);
+    socket.emit("adminLogin", { username, password }, (result) => {
+      setLoading(false);
+      if (!result.ok) return setMessage(result.error);
+      sessionStorage.setItem(adminTokenKey, result.token);
+      setToken(result.token);
+      setPassword("");
+      setMessage("");
+    });
+  };
+
+  const logout = () => {
+    if (token) socket.emit("adminLogout", { token });
+    sessionStorage.removeItem(adminTokenKey);
+    setToken("");
+    setRooms([]);
+    setDetails(null);
+  };
+
+  const showDetails = (code: string) => {
+    socket.emit("adminRoomDetails", { token, code }, (result) => {
+      if (!result.ok) return setMessage(result.error);
+      setDetails(result.room);
+      setMessage("");
+    });
+  };
+
+  const deleteRoom = (room: AdminRoomSummary) => {
+    if (!window.confirm(`Supprimer le salon ${room.code} ? Tous les joueurs seront renvoyes a l'accueil.`)) return;
+    socket.emit("adminDeleteRoom", { token, code: room.code }, (result) => {
+      if (!result.ok) return setMessage(result.error);
+      setMessage(`Salon ${room.code} supprime.`);
+      setDetails(null);
+      loadRooms();
+    });
+  };
+
+  if (!token) {
+    return (
+      <main className="shell admin-page">
+        <button className="admin-link" onClick={onBack}><ArrowLeft size={16} /> Retour accueil</button>
+        <section className="entry admin-login">
+          <h1>Administration</h1>
+          <form onSubmit={login}>
+            <label>
+              Identifiant
+              <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
+            </label>
+            <label>
+              Mot de passe
+              <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" />
+            </label>
+            <button className="primary" disabled={loading || !username || !password}><Lock size={17} /> Connexion</button>
+          </form>
+          {message && <p className="toast">{message}</p>}
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="shell admin-page">
+      <section className="panel admin-dashboard">
+        <div className="admin-toolbar">
+          <div>
+            <span className="eyebrow">Administration</span>
+            <h1>Salons actifs</h1>
+          </div>
+          <div className="actions-row">
+            <button onClick={() => loadRooms()} disabled={loading}><RefreshCw size={16} /> Refresh</button>
+            <button onClick={logout}><LogOut size={16} /> Deconnexion</button>
+            <button onClick={onBack}><ArrowLeft size={16} /> Accueil</button>
+          </div>
+        </div>
+        {message && <p className="toast">{message}</p>}
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Hote</th>
+                <th>Joueurs</th>
+                <th>Statut</th>
+                <th>Audio</th>
+                <th>Creation</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rooms.map((room) => (
+                <tr key={room.code}>
+                  <td><strong>{room.code}</strong></td>
+                  <td>{room.hostName}</td>
+                  <td>{room.connectedPlayers} / {room.playerCount}</td>
+                  <td>{adminStatusLabel(room.status)}</td>
+                  <td>{room.audioMode === "integrated" ? "integre" : "externe"}</td>
+                  <td>{new Date(room.createdAt).toLocaleString()}</td>
+                  <td>
+                    <div className="admin-actions">
+                      <button onClick={() => showDetails(room.code)}><Eye size={16} /> Voir details</button>
+                      <button className="danger" onClick={() => deleteRoom(room)}><Trash2 size={16} /> Supprimer</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!rooms.length && (
+                <tr>
+                  <td colSpan={7}>Aucun salon actif.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {details && (
+          <div className="admin-details">
+            <h2>Details du salon {details.code}</h2>
+            <p>Phase : {phaseLabel(details.phase)} - Tour {details.round}</p>
+            <div className="players">
+              {details.players.map((player) => (
+                <div className={`player ${player.alive ? "" : "out"}`} key={player.id}>
+                  <span>{player.name}{player.isHost ? " - Hote" : ""}{player.isMayor ? " - Maire" : ""}</span>
+                  <small>{player.connected ? "en ligne" : "deconnecte"} - {player.alive ? "en jeu" : "elimine"}</small>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+    </main>
+  );
 }
 
 function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: string; onToast: (message: string) => void; onLeaveRoom: () => void }) {
@@ -894,6 +1062,15 @@ function phaseLabel(phase: RoomView["phase"]) {
     GAME_OVER: "Fin"
   };
   return labels[phase];
+}
+
+function adminStatusLabel(status: AdminRoomSummary["status"]) {
+  const labels: Record<AdminRoomSummary["status"], string> = {
+    lobby: "lobby",
+    inGame: "partie en cours",
+    finished: "terminee"
+  };
+  return labels[status];
 }
 
 function formatSeconds(seconds: number) {

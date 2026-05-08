@@ -51,6 +51,8 @@ NODE_ENV=development
 PUBLIC_URL=http://localhost:3000
 CORS_ORIGIN=http://localhost:5173
 CLIENT_URL=http://localhost:5173
+ADMIN_USERNAME=aubinaso
+ADMIN_PASSWORD=ep*/-tata
 ```
 
 ## Lancement en développement
@@ -107,8 +109,45 @@ CLIENT_URL=http://localhost:5173
 - `PUBLIC_URL` : URL publique de production.
 - `CORS_ORIGIN` : origine autorisée par CORS.
 - `CLIENT_URL` : origine Vite en développement, utilisée seulement si `CORS_ORIGIN` n'est pas définie.
+- `ADMIN_USERNAME` : identifiant de connexion à l'interface administrateur.
+- `ADMIN_PASSWORD` : mot de passe administrateur.
 
 Le frontend n'utilise pas de variable Vite actuellement. En production, il se connecte au backend par la même origine que la page servie.
+
+## Administration
+
+L'interface administrateur est accessible depuis la page d'accueil avec le bouton discret **Administration**. Elle permet de surveiller les salons actifs et de supprimer un salon bloqué ou ouvert par erreur.
+
+Les identifiants ne doivent jamais être codés en dur dans le code source. Configurez-les dans `.env` :
+
+```env
+ADMIN_USERNAME=aubinaso
+ADMIN_PASSWORD=ep*/-tata
+```
+
+Sur un serveur, modifiez ces valeurs avant le lancement et gardez le fichier `.env` hors de Git. Après changement des identifiants, redémarrez l'application (`pm2 restart les-infiltres` en production PM2).
+
+Après connexion, le dashboard admin affiche :
+
+- le code du salon ;
+- le nom de l'hôte ;
+- le nombre de joueurs connectés et total ;
+- le statut : lobby, partie en cours ou terminée ;
+- le mode audio : intégré ou externe ;
+- la date et l'heure de création ;
+- un bouton **Voir détails** pour consulter les joueurs ;
+- un bouton **Supprimer le salon**.
+
+La suppression d'un salon demande confirmation, notifie les joueurs avec le message `Ce salon a été supprimé par l'administrateur.`, arrête la partie si elle était en cours, coupe les flux audio côté client via le retour accueil, puis supprime la room côté serveur.
+
+Sécurité :
+
+- aucune action admin n'est acceptée sans authentification serveur ;
+- le mot de passe n'est jamais envoyé au frontend après connexion ;
+- le serveur émet un token temporaire stocké uniquement dans `sessionStorage` ;
+- utilisez HTTPS en production ;
+- choisissez un mot de passe fort et ne partagez pas l'accès admin ;
+- utilisez **Déconnexion** après administration, surtout sur un poste partagé.
 
 ## Structure du projet
 
@@ -202,6 +241,8 @@ NODE_ENV=production
 PUBLIC_URL=https://infiltre.traillearn.org
 CORS_ORIGIN=https://infiltre.traillearn.org
 CLIENT_URL=http://localhost:5173
+ADMIN_USERNAME=aubinaso
+ADMIN_PASSWORD=ep*/-tata
 ```
 
 `HOST=127.0.0.1` est recommandé derrière Nginx. Utilisez `HOST=0.0.0.0` seulement si le serveur Node doit écouter directement sur le réseau.

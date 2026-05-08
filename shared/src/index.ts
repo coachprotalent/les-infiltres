@@ -138,10 +138,37 @@ export type RoomView = {
   gameLog?: GameLogEntry[];
 };
 
+export type AdminRoomStatus = "lobby" | "inGame" | "finished";
+
+export type AdminRoomSummary = {
+  code: string;
+  hostName: string;
+  connectedPlayers: number;
+  playerCount: number;
+  status: AdminRoomStatus;
+  phase: GamePhase;
+  audioMode: AudioMode;
+  createdAt: number;
+};
+
+export type AdminRoomDetails = AdminRoomSummary & {
+  players: Pick<PlayerPublic, "id" | "name" | "connected" | "alive" | "isHost" | "isMayor">[];
+  round: number;
+};
+
+export type AdminResult<T = undefined> =
+  | (T extends undefined ? { ok: true } : { ok: true } & T)
+  | { ok: false; error: string };
+
 export type ClientToServerEvents = {
   createRoom: (payload: { name: string; audioMode: AudioMode; sessionId?: string; config?: Partial<GameConfig> }, ack: (view: RoomView) => void) => void;
   joinRoom: (payload: { code: string; name: string; sessionId?: string }, ack: (result: { ok: true; view: RoomView } | { ok: false; error: string }) => void) => void;
   reconnectRoom: (payload: { code: string; sessionId: string }, ack: (result: { ok: true; view: RoomView } | { ok: false; error: string }) => void) => void;
+  adminLogin: (payload: { username: string; password: string }, ack: (result: AdminResult<{ token: string }>) => void) => void;
+  adminLogout: (payload: { token: string }) => void;
+  adminListRooms: (payload: { token: string }, ack: (result: AdminResult<{ rooms: AdminRoomSummary[] }>) => void) => void;
+  adminRoomDetails: (payload: { token: string; code: string }, ack: (result: AdminResult<{ room: AdminRoomDetails }>) => void) => void;
+  adminDeleteRoom: (payload: { token: string; code: string }, ack: (result: AdminResult) => void) => void;
   updateConfig: (payload: { code: string; config: Partial<GameConfig> }) => void;
   updateAudioMode: (payload: { code: string; audioMode: AudioMode }) => void;
   closeRoom: (payload: { code: string }) => void;

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { AudioMode, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, VoteRecord, Winner } from "@les-infiltres/shared";
+import type { AdminRoomDetails, AdminRoomSummary, AudioMode, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, VoteRecord, Winner } from "@les-infiltres/shared";
 import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, mergeConfig } from "@les-infiltres/shared";
 
 type Player = {
@@ -40,6 +40,7 @@ type PowerState = {
 type Room = {
   code: string;
   hostId: string;
+  createdAt: number;
   mayorId?: string;
   audioMode: AudioMode;
   phase: GamePhase;
@@ -102,6 +103,7 @@ export class GameStore {
     const room: Room = {
       code,
       hostId: host.id,
+      createdAt: Date.now(),
       audioMode,
       phase: "LOBBY",
       round: 0,
@@ -119,6 +121,39 @@ export class GameStore {
     this.log(room, "system", "Salle creee.");
     this.rooms.set(code, room);
     return this.viewFor(room, host.id);
+  }
+
+  adminRooms(): AdminRoomSummary[] {
+    return [...this.rooms.values()]
+      .map((room) => this.adminSummary(room))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  adminRoomDetails(code: string): AdminRoomDetails | undefined {
+    const room = this.getRoom(code);
+    if (!room) return undefined;
+    return {
+      ...this.adminSummary(room),
+      players: room.players.map((player) => ({
+        id: player.id,
+        name: player.name,
+        connected: player.connected,
+        alive: player.alive,
+        isHost: player.id === room.hostId,
+        isMayor: player.id === room.mayorId
+      })),
+      round: room.round
+    };
+  }
+
+  adminDeleteRoom(code: string) {
+    const room = this.getRoom(code);
+    if (!room) return false;
+    this.clearTimer(room);
+    const sockets = room.players.flatMap((player) => (player.socketId ? [player.socketId] : []));
+    this.rooms.delete(room.code);
+    for (const socketId of sockets) this.onClose(socketId, "Ce salon a été supprimé par l'administrateur.");
+    return true;
   }
 
   joinRoom(code: string, name: string, socketId: string, sessionId = randomId()) {
@@ -829,6 +864,20 @@ export class GameStore {
 
   private getRoom(code: string) {
     return this.rooms.get(code.trim().toUpperCase());
+  }
+
+  private adminSummary(room: Room): AdminRoomSummary {
+    const host = room.players.find((player) => player.id === room.hostId);
+    return {
+      code: room.code,
+      hostName: host?.name ?? "Hote inconnu",
+      connectedPlayers: room.players.filter((player) => player.connected).length,
+      playerCount: room.players.length,
+      status: room.phase === "LOBBY" ? "lobby" : room.phase === "GAME_OVER" ? "finished" : "inGame",
+      phase: room.phase,
+      audioMode: room.audioMode,
+      createdAt: room.createdAt
+    };
   }
 
   private createCode() {
