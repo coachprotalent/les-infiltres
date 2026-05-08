@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { AdminRoomDetails, AdminRoomSummary, AudioMode, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
 import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, mergeConfig } from "@les-infiltres/shared";
+import { NarrationService } from "./narration.js";
 
 type Player = {
   id: string;
@@ -56,6 +57,7 @@ type Room = {
   narrator: string;
   transition?: RoomView["transition"];
   timer?: NodeJS.Timeout;
+  timerPulse?: NodeJS.Timeout;
   timerStartedAt?: number;
   timerDuration?: number;
   timerEndsAt?: number;
@@ -65,6 +67,8 @@ type Room = {
   pastorAttemptedIds: Set<string>;
   gameLog: GameLogEntry[];
   revoteTargets?: string[];
+  nominations: VoteRecord[];
+  nominees: string[];
 };
 
 const NIGHT_STEPS_FIRST: NightStep[] = ["agent-double", "hackeuse", "avocate", "lanceuse-alerte", "infiltres", "ministre"];
@@ -115,6 +119,8 @@ export class GameStore {
       night: emptyNight(false),
       votes: [],
       mayorVotes: [],
+      nominations: [],
+      nominees: [],
       narrator: "Salle creee. En attente des joueurs.",
       powers: emptyPowers(),
       pastorAttemptedIds: new Set(),
@@ -294,8 +300,9 @@ export class GameStore {
       p.audioActive = false;
       p.muted = room.audioMode === "integrated" ? !p.alive : p.muted;
     });
-    room.narrator = "Roles distribues. Election publique du Maire : chaque joueur vote pour un Maire.";
+    room.narrator = "Les roles sont distribues. L'election publique du Maire commence : chaque voix peut encore changer jusqu'au dernier instant.";
     this.log(room, "phase", "Roles distribues et election du Maire ouverte.");
+    this.startTimer(room, room.config.durations.mayorElection, () => this.resolveMayorElection(room));
     this.emit(room);
   }
 
@@ -312,7 +319,7 @@ export class GameStore {
     this.log(room, "vote", `${voter.name} vote pour ${target.name} comme Maire.`);
     const eligible = room.players.filter((p) => p.alive && p.canVote).length;
     if (room.mayorVotes.length >= eligible) return this.resolveMayorElection(room);
-    room.narrator = "Election du Maire en cours.";
+    room.narrator = "Election du Maire en cours. Les derniers choix peuvent encore bouleverser la salle.";
     this.emit(room);
   }
 
@@ -321,8 +328,9 @@ export class GameStore {
     if (!room) return;
     if (room.phase === "MAYOR_ELECTION") return this.resolveMayorElection(room);
     if (room.phase === "NIGHT") return this.advanceNight(room);
-    if (room.phase === "DAY_ANNOUNCEMENT") return this.startTimedPhase(room, "DEBATE", room.config.durations.freeDebate, "Debat libre en cours. Tout le monde vivant peut parler.");
-    if (room.phase === "DEBATE" || room.phase === "DEFENSE") return this.startTimedPhase(room, "VOTING", room.config.durations.vote, "Vote ouvert. Le Maire possede une voix double.");
+    if (room.phase === "DAY_ANNOUNCEMENT") return this.startTimedPhase(room, "DEBATE", room.config.durations.freeDebate, "Debat libre en cours. Les regards cherchent la faille.");
+    if (room.phase === "DEBATE" || room.phase === "DEFENSE") return this.startNomination(room);
+    if (room.phase === "NOMINATION") return this.startVoteFromNominations(room);
     if (room.phase === "VOTING") return this.resolveVote(room);
     if (room.phase === "RESULT") return this.startNight(room);
     return this.reject(actorSocketId, "Aucune phase a debloquer maintenant.");
@@ -349,6 +357,8 @@ export class GameStore {
     room.night = emptyNight(false);
     room.votes = [];
     room.mayorVotes = [];
+    room.nominations = [];
+    room.nominees = [];
     room.transition = undefined;
     room.timerStartedAt = undefined;
     room.timerDuration = undefined;
@@ -460,7 +470,7 @@ export class GameStore {
   startDebate(code: string, actorSocketId: string, seconds?: number) {
     const room = this.requireMayor(code, actorSocketId);
     if (room && (room.phase === "DAY_ANNOUNCEMENT" || room.phase === "DEBATE")) {
-      this.startTimedPhase(room, "DEBATE", seconds ?? room.config.durations.freeDebate, "Debat libre en cours. Tout le monde vivant peut parler.");
+      this.startTimedPhase(room, "DEBATE", seconds ?? room.config.durations.freeDebate, "Debat libre en cours. Les soupcons circulent, et chaque silence pese.");
     } else if (room) {
       this.reject(actorSocketId, "Le debat ne peut pas etre ouvert pendant cette phase.");
     }
@@ -488,6 +498,7 @@ export class GameStore {
   stopSpeech(codeOrRoom: string | Room, actorSocketId?: string) {
     const room = typeof codeOrRoom === "string" ? this.requireMayor(codeOrRoom, actorSocketId ?? "") : codeOrRoom;
     if (!room) return;
+    this.clearTimer(room);
     room.players.forEach((p) => {
       p.speaking = false;
       p.canSpeak = p.alive;
@@ -495,18 +506,38 @@ export class GameStore {
       if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
     });
     room.phase = "DEBATE";
-    room.timerStartedAt = undefined;
-    room.timerDuration = undefined;
-    room.timerEndsAt = undefined;
     room.narrator = "Parole coupee. Discussion libre.";
+    this.emit(room);
+  }
+
+  closeDebate(code: string, actorSocketId: string) {
+    const room = this.requireMayor(code, actorSocketId);
+    if (!room) return;
+    if (!["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(room.phase)) return this.reject(actorSocketId, "Le debat ne peut pas etre cloture pendant cette phase.");
+    this.startNomination(room);
+  }
+
+  nominate(code: string, actorSocketId: string, targetId: string) {
+    const room = this.getRoom(code);
+    const voter = room?.players.find((p) => p.socketId === actorSocketId);
+    const target = room?.players.find((p) => p.id === targetId);
+    if (!room || !voter) return this.reject(actorSocketId, "Partie introuvable.");
+    if (room.phase !== "NOMINATION") return this.reject(actorSocketId, "Vous ne pouvez pas nominer pendant cette phase.");
+    if (!voter.alive) return this.reject(actorSocketId, "Vous etes emprisonne.");
+    if (!voter.canVote) return this.reject(actorSocketId, "Vous ne pouvez pas nominer.");
+    if (!target?.alive || target.id === voter.id) return this.reject(actorSocketId, "Cible invalide.");
+    room.nominations = room.nominations.filter((vote) => vote.voterId !== voter.id).concat({ voterId: voter.id, targetId });
+    this.log(room, "vote", `${voter.name} nomine ${target.name}.`);
+    room.narrator = "Les nominations s'accumulent. Les suspects sont exposes devant tous.";
     this.emit(room);
   }
 
   startVote(code: string, actorSocketId: string, seconds?: number) {
     const room = this.requireMayor(code, actorSocketId);
     if (!room) return;
+    if (room.phase === "NOMINATION") return this.startVoteFromNominations(room, seconds);
     if (!["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(room.phase)) return this.reject(actorSocketId, "Le vote ne peut pas etre lance pendant cette phase.");
-    this.startTimedPhase(room, "VOTING", seconds ?? room.config.durations.vote, "Vote ouvert. Le Maire possede une voix double.");
+    this.startNomination(room);
   }
 
   vote(code: string, actorSocketId: string, targetId: string) {
@@ -518,6 +549,7 @@ export class GameStore {
     if (!voter.alive) return this.reject(actorSocketId, "Vous etes elimine.");
     if (!voter.canVote) return this.reject(actorSocketId, "Vous ne pouvez pas voter.");
     if (!target?.alive) return this.reject(actorSocketId, "Cible invalide.");
+    if (room.nominees.length && !room.nominees.includes(target.id)) return this.reject(actorSocketId, "Le vote est limite aux joueurs nomines.");
     if (room.revoteTargets && !room.revoteTargets.includes(target.id)) return this.reject(actorSocketId, "Le second tour est limite aux joueurs a egalite.");
     room.votes = room.votes.filter((vote) => vote.voterId !== voter.id).concat({ voterId: voter.id, targetId });
     this.log(room, "vote", `${voter.name} vote contre ${target.name}.`);
@@ -576,6 +608,7 @@ export class GameStore {
   }
 
   private resolveMayorElection(room: Room) {
+    this.clearTimer(room);
     const alive = room.players.filter((p) => p.alive);
     const scores = tally(room.mayorVotes, room);
     const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]);
@@ -589,6 +622,42 @@ export class GameStore {
     this.startNight(room);
   }
 
+  private startNomination(room: Room) {
+    this.clearTimer(room);
+    room.phase = "NOMINATION";
+    room.transition = undefined;
+    room.nominations = [];
+    room.nominees = [];
+    room.votes = [];
+    room.revoteTargets = undefined;
+    room.players.forEach((p) => {
+      p.speaking = false;
+      p.canSpeak = false;
+      p.audioActive = false;
+      if (room.audioMode === "integrated") p.muted = true;
+    });
+    room.narrator = NarrationService.fallback({ type: "nomination", phase: room.phase, round: room.round }, "Les nominations sont ouvertes. Chaque joueur vivant peut designer un suspect, et peut changer d'avis avant la fin.");
+    this.log(room, "phase", "Nominations ouvertes.");
+    this.startTimer(room, room.config.durations.nomination, () => this.startVoteFromNominations(room));
+    this.emit(room);
+  }
+
+  private startVoteFromNominations(room: Room, seconds?: number) {
+    this.clearTimer(room);
+    room.nominees = Array.from(new Set(room.nominations.map((vote) => vote.targetId))).filter((id) => room.players.some((p) => p.id === id && p.alive));
+    if (!room.nominees.length) {
+      room.phase = "RESULT";
+      room.votes = [];
+      room.revoteTargets = undefined;
+      room.lastResult = "Aucun joueur n'a ete nomine. Personne n'est exclu, et la nuit reprend.";
+      room.narrator = "Aucun nom ne reste dans la lumiere. La journee s'acheve sans emprisonnement.";
+      this.log(room, "phase", room.lastResult);
+      this.startTimer(room, room.config.durations.resultReveal, () => this.startNight(room));
+      return this.emit(room);
+    }
+    this.startTimedPhase(room, "VOTING", seconds ?? room.config.durations.vote, NarrationService.fallback({ type: "vote", phase: "VOTING", round: room.round }, "Vote ouvert parmi les joueurs nomines. Les choix sont publics, les voix se comptent devant tous."));
+  }
+
   private startNight(room: Room) {
     this.clearTimer(room);
     if (this.checkWin(room)) return this.emit(room);
@@ -596,6 +665,8 @@ export class GameStore {
     room.transition = "night-falls";
     room.round += 1;
     room.votes = [];
+    room.nominations = [];
+    room.nominees = [];
     room.revoteTargets = undefined;
     room.players.forEach((p) => {
       p.canVote = p.alive;
@@ -605,9 +676,8 @@ export class GameStore {
       if (room.audioMode === "integrated") p.muted = p.alive || !room.config.deadCanHearAudio;
     });
     room.night = emptyNight(room.round === 1);
-    room.narrator = `La nuit tombe. Nuit ${room.round}. Le jeu reveille les roles dans l'ordre.`;
+    room.narrator = NarrationService.fallback({ type: "nightStart", phase: room.phase, round: room.round }, `La nuit tombe sur le groupe. Nuit ${room.round}. Les roles se reveillent un a un.`);
     this.log(room, "phase", `Nuit ${room.round}.`);
-    this.startTimer(room, room.config.durations.night, () => this.resolveNight(room));
     this.skipMissingRoles(room);
     this.emit(room);
   }
@@ -616,7 +686,12 @@ export class GameStore {
     this.completeStep(room, room.night.steps[room.night.stepIndex]);
   }
 
-  private completeStep(room: Room, step: NightStep) {
+  private completeStep(room: Room, step: NightStep, timedOut = false) {
+    this.clearTimer(room);
+    if (timedOut) {
+      room.narrator = "Temps ecoule, le jeu continue.";
+      this.log(room, "phase", `Temps ecoule pour ${step}.`);
+    }
     room.night.completed.add(step);
     room.night.stepIndex += 1;
     if (room.night.stepIndex >= room.night.steps.length) return this.resolveNight(room);
@@ -643,6 +718,7 @@ export class GameStore {
       if (!role || room.players.some((p) => p.alive && p.role === role)) {
         room.narrator = narratorForStep(step, room);
         applyIntegratedAudioState(room);
+        this.startTimer(room, room.config.durations.nightAction, () => this.completeStep(room, step, true));
         return;
       }
       room.night.stepIndex += 1;
@@ -682,7 +758,7 @@ export class GameStore {
     room.phase = "DAY_ANNOUNCEMENT";
     room.transition = "day-rises";
     room.lastResult = result;
-    room.narrator = `Le jour se leve. ${result} ${this.silencedText(room)} Le Maire peut ouvrir le debat.`;
+    room.narrator = `${NarrationService.fallback({ type: "dayStart", phase: "DAY_ANNOUNCEMENT", round: room.round, summary: result }, "Le jour se leve, et chacun cherche les signes de trahison.")} ${result} ${this.silencedText(room)} Le Maire peut ouvrir le debat.`;
     room.players.forEach((p) => {
       p.speaking = false;
       p.canSpeak = p.alive;
@@ -704,6 +780,7 @@ export class GameStore {
       room.lastResult = "Aucun vote valide. Personne n'est exclu.";
       room.narrator = room.lastResult;
       this.log(room, "phase", room.lastResult);
+      this.startTimer(room, room.config.durations.resultReveal, () => this.startNight(room));
       return this.emit(room);
     }
     const tied = ranked.filter(([, score]) => score === top[1]);
@@ -721,6 +798,7 @@ export class GameStore {
       room.lastResult = "Egalite au vote. Personne n'est exclu.";
       room.narrator = room.lastResult;
       this.log(room, "phase", room.lastResult);
+      this.startTimer(room, room.config.durations.resultReveal, () => this.startNight(room));
       return this.emit(room);
     }
     const excluded = room.players.find((p) => p.id === top[0]);
@@ -731,7 +809,7 @@ export class GameStore {
     }
     room.phase = "RESULT";
     room.revoteTargets = undefined;
-    this.checkWin(room);
+    if (!this.checkWin(room)) this.startTimer(room, room.config.durations.resultReveal, () => this.startNight(room));
     this.emit(room);
   }
 
@@ -801,7 +879,11 @@ export class GameStore {
       });
     }
     this.log(room, "phase", narrator);
-    this.startTimer(room, seconds, () => (phase === "VOTING" ? this.resolveVote(room) : this.emit(room)));
+    this.startTimer(room, seconds, () => {
+      if (phase === "VOTING") return this.resolveVote(room);
+      if (phase === "DEBATE") return this.startNomination(room);
+      this.emit(room);
+    });
     this.emit(room);
   }
 
@@ -813,11 +895,14 @@ export class GameStore {
     room.timerDuration = duration;
     room.timerEndsAt = startedAt + duration * 1000;
     room.timer = setTimeout(done, duration * 1000);
+    room.timerPulse = setInterval(() => this.emit(room), 1000);
   }
 
   private clearTimer(room: Room) {
     if (room.timer) clearTimeout(room.timer);
+    if (room.timerPulse) clearInterval(room.timerPulse);
     room.timer = undefined;
+    room.timerPulse = undefined;
     room.timerStartedAt = undefined;
     room.timerDuration = undefined;
     room.timerEndsAt = undefined;
@@ -983,6 +1068,12 @@ export class GameStore {
       voteDetails: room.phase === "VOTING" ? voteDetailsFor(room.votes, room, true) : [],
       voteTotals: room.phase === "VOTING" ? voteTotalsFor(room.votes, room, true) : [],
       mayorVotes: room.phase === "MAYOR_ELECTION" ? room.mayorVotes : [],
+      mayorVoteDetails: room.phase === "MAYOR_ELECTION" ? voteDetailsFor(room.mayorVotes, room, false) : [],
+      mayorVoteTotals: room.phase === "MAYOR_ELECTION" ? voteTotalsFor(room.mayorVotes, room, false) : [],
+      nominations: room.phase === "NOMINATION" || room.phase === "VOTING" ? room.nominations : [],
+      nominationDetails: room.phase === "NOMINATION" || room.phase === "VOTING" ? voteDetailsFor(room.nominations, room, false) : [],
+      nominationTotals: room.phase === "NOMINATION" || room.phase === "VOTING" ? voteTotalsFor(room.nominations, room, false) : [],
+      nominees: room.phase === "NOMINATION" || room.phase === "VOTING" ? room.nominees : [],
       infiltratorVotes: canSeeInfiltratorVotes(player, room, activeStep) ? infiltratorVoteDetails(room) : undefined,
       infiltratorVoteLeader: canSeeInfiltratorVotes(player, room, activeStep) ? infiltratorVoteLeader(room) : undefined,
       lastResult: room.lastResult,

@@ -25,6 +25,7 @@ export type GamePhase =
   | "DAY_ANNOUNCEMENT"
   | "DEBATE"
   | "DEFENSE"
+  | "NOMINATION"
   | "VOTING"
   | "RESULT"
   | "GAME_OVER";
@@ -34,8 +35,11 @@ export type TieRule = "none" | "revote";
 export type Winner = "Croyants" | "Infiltres";
 
 export type PhaseDurations = {
-  night: number;
+  mayorElection: number;
+  nightAction: number;
+  transitionNight: number;
   freeDebate: number;
+  nomination: number;
   defense: number;
   vote: number;
   resultReveal: number;
@@ -156,6 +160,12 @@ export type RoomView = {
   voteDetails: VoteViewRecord[];
   voteTotals: VoteTotal[];
   mayorVotes: VoteRecord[];
+  mayorVoteDetails: VoteViewRecord[];
+  mayorVoteTotals: VoteTotal[];
+  nominations: VoteRecord[];
+  nominationDetails: VoteViewRecord[];
+  nominationTotals: VoteTotal[];
+  nominees: string[];
   infiltratorVotes?: InfiltratorVoteView[];
   infiltratorVoteLeader?: VoteTotal;
   lastResult?: string;
@@ -208,6 +218,8 @@ export type ClientToServerEvents = {
   startDebate: (payload: { code: string; seconds?: number }) => void;
   grantSpeech: (payload: { code: string; playerId: string; seconds?: number }) => void;
   stopSpeech: (payload: { code: string }) => void;
+  closeDebate: (payload: { code: string }) => void;
+  nominate: (payload: { code: string; targetId: string }) => void;
   startVote: (payload: { code: string; seconds?: number }) => void;
   vote: (payload: { code: string; targetId: string }) => void;
   setMuted: (payload: { code: string; playerId: string; muted: boolean }) => void;
@@ -223,8 +235,11 @@ export type ServerToClientEvents = {
 };
 
 export const DEFAULT_DURATIONS: PhaseDurations = {
-  night: 180,
+  mayorElection: 60,
+  nightAction: 10,
+  transitionNight: 5,
   freeDebate: 180,
+  nomination: 60,
   defense: 45,
   vote: 60,
   resultReveal: 20
@@ -323,6 +338,7 @@ export function getInfiltratorCount(playerCount: number) {
 
 export function mergeConfig(config?: Partial<GameConfig>): GameConfig {
   const enabledRoles = config?.enabledRoles?.filter((role) => ROLES.includes(role)) ?? DEFAULT_CONFIG.enabledRoles;
+  const legacyDurations = config?.durations as Partial<PhaseDurations> & { night?: number } | undefined;
   return {
     maxPlayers: clampInt(config?.maxPlayers, MIN_PLAYERS, MAX_PLAYERS, DEFAULT_CONFIG.maxPlayers),
     tieRule: config?.tieRule === "revote" ? "revote" : "none",
@@ -330,8 +346,11 @@ export function mergeConfig(config?: Partial<GameConfig>): GameConfig {
     requireSpecialRoles: config?.requireSpecialRoles ?? DEFAULT_CONFIG.requireSpecialRoles,
     enabledRoles: Array.from(new Set(["Infiltre" as Role, ...enabledRoles])),
     durations: {
-      night: clampInt(config?.durations?.night, 15, 1800, DEFAULT_DURATIONS.night),
+      mayorElection: clampInt(config?.durations?.mayorElection, 10, 600, DEFAULT_DURATIONS.mayorElection),
+      nightAction: clampInt(config?.durations?.nightAction ?? legacyDurations?.night, 5, 60, DEFAULT_DURATIONS.nightAction),
+      transitionNight: clampInt(config?.durations?.transitionNight, 0, 120, DEFAULT_DURATIONS.transitionNight),
       freeDebate: clampInt(config?.durations?.freeDebate, 15, 3600, DEFAULT_DURATIONS.freeDebate),
+      nomination: clampInt(config?.durations?.nomination, 10, 600, DEFAULT_DURATIONS.nomination),
       defense: clampInt(config?.durations?.defense, 10, 600, DEFAULT_DURATIONS.defense),
       vote: clampInt(config?.durations?.vote, 10, 600, DEFAULT_DURATIONS.vote),
       resultReveal: clampInt(config?.durations?.resultReveal, 5, 300, DEFAULT_DURATIONS.resultReveal)
