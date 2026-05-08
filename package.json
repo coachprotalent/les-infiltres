@@ -1,0 +1,25 @@
+{
+  "name": "les-infiltres",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n shared,backend,frontend -c green,cyan,magenta \"npm run dev -w shared\" \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "build": "npm run build -w shared && npm run build -w backend && npm run build -w frontend",
+    "typecheck": "npm run build -w shared && npm run typecheck -w backend && npm run typecheck -w frontend",
+    "start": "node backend/dist/index.js"
+  },
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
+  "workspaces": [
+    "backend",
+    "frontend",
+    "shared"
+  ],
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3"
+  }
+}
