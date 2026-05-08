@@ -13,6 +13,13 @@ type PeerEntry = {
   audio?: HTMLAudioElement;
 };
 type AudioPermission = "idle" | "requesting" | "granted" | "denied" | "missing" | "unsupported";
+type TimerInfo = {
+  label: string;
+  secondsLeft: number;
+  duration: number;
+  progress: number;
+  urgent: boolean;
+};
 
 const socket: AppSocket = io("/", { autoConnect: true });
 const sessionKey = "les-infiltres-session";
@@ -135,7 +142,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
     if (!next && "speechSynthesis" in window) window.speechSynthesis.cancel();
   };
 
-  const secondsLeft = view.timerEndsAt ? Math.max(0, Math.ceil((view.timerEndsAt - now) / 1000)) : undefined;
+  const timer = getTimerInfo(view, now);
   const mayor = view.players.find((player) => player.id === view.mayorId);
 
   return (
@@ -147,7 +154,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
             {view.code} <Copy size={16} />
           </button>
         </div>
-        <StatusPill view={view} secondsLeft={secondsLeft} />
+        <StatusPill view={view} timer={timer} />
       </header>
 
       {view.transition && <TransitionBanner transition={view.transition} />}
@@ -162,6 +169,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
           <button className={voiceEnabled ? "voice-on" : ""} onClick={toggleVoice}>{voiceEnabled ? "Voix active" : "Activer voix"}</button>
         </div>
         {mayor && <p className="mayor-line"><Crown size={16} /> Maire : {mayor.name}</p>}
+        {timer && <PhaseTimer timer={timer} />}
         {you && !you.alive && <p className="spectator-line">Vous etes spectateur : vous voyez les debats sans voter, parler ni agir.</p>}
         {toast && <p className="toast">{toast}</p>}
       </section>
@@ -172,7 +180,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
           {view.phase === "MAYOR_ELECTION" && <MayorElection view={view} />}
           {view.phase !== "LOBBY" && you && <RoleCard view={view} />}
           {view.phase === "NIGHT" && <NightPanel view={view} />}
-          {["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(view.phase) && <DebatePanel view={view} secondsLeft={secondsLeft} />}
+          {["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(view.phase) && <DebatePanel view={view} timer={timer} />}
           {view.phase === "VOTING" && <VotePanel view={view} />}
           {view.phase === "RESULT" && <ResultPanel view={view} />}
           {view.phase === "GAME_OVER" && <EndPanel view={view} onLeaveRoom={onLeaveRoom} />}
@@ -197,7 +205,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
         </aside>
       </div>
 
-      {you?.isMayor && you.alive && <MayorPanel view={view} alivePlayers={alivePlayers} />}
+      {you?.isMayor && you.alive && <MayorPanel view={view} alivePlayers={alivePlayers} timer={timer} />}
       {you?.isHost && <AdminPanel view={view} />}
     </main>
   );
@@ -446,12 +454,24 @@ function ConfigEditor({ config, onChange, compact = false }: { config: GameConfi
     <div className={`config ${compact ? "compact" : ""}`}>
       <h3><Settings size={16} /> Configuration avancee</h3>
       <div className="config-grid">
-        <label>Max joueurs<input type="number" min={7} max={20} value={config.maxPlayers} onChange={(e) => update({ maxPlayers: Number(e.target.value) })} /></label>
-        <label>Egalite<select value={config.tieRule} onChange={(e) => update({ tieRule: e.target.value === "revote" ? "revote" : "none" })}><option value="none">Aucun elimine</option><option value="revote">Revote</option></select></label>
-        <label>Nuit<input type="number" value={config.durations.night} onChange={(e) => update({ durations: { ...config.durations, night: Number(e.target.value) } })} /></label>
-        <label>Debat<input type="number" value={config.durations.freeDebate} onChange={(e) => update({ durations: { ...config.durations, freeDebate: Number(e.target.value) } })} /></label>
-        <label>Defense<input type="number" value={config.durations.defense} onChange={(e) => update({ durations: { ...config.durations, defense: Number(e.target.value) } })} /></label>
-        <label>Vote<input type="number" value={config.durations.vote} onChange={(e) => update({ durations: { ...config.durations, vote: Number(e.target.value) } })} /></label>
+        <ConfigField label="Max joueurs" help="Nombre maximum de joueurs autorises dans la partie.">
+          <input type="number" min={7} max={20} value={config.maxPlayers} onChange={(e) => update({ maxPlayers: Number(e.target.value) })} />
+        </ConfigField>
+        <ConfigField label="Egalite" help="Regle appliquee si un vote finit a egalite. Aucun elimine signifie que personne n'est emprisonne.">
+          <select value={config.tieRule} onChange={(e) => update({ tieRule: e.target.value === "revote" ? "revote" : "none" })}><option value="none">Aucun elimine</option><option value="revote">Revote</option></select>
+        </ConfigField>
+        <ConfigField label="Nuit" help="Duree en secondes de la phase de nuit.">
+          <input type="number" value={config.durations.night} onChange={(e) => update({ durations: { ...config.durations, night: Number(e.target.value) } })} />
+        </ConfigField>
+        <ConfigField label="Debat" help="Duree en secondes du debat general pendant la journee.">
+          <input type="number" value={config.durations.freeDebate} onChange={(e) => update({ durations: { ...config.durations, freeDebate: Number(e.target.value) } })} />
+        </ConfigField>
+        <ConfigField label="Defense" help="Duree en secondes accordee a un joueur pour se defendre.">
+          <input type="number" value={config.durations.defense} onChange={(e) => update({ durations: { ...config.durations, defense: Number(e.target.value) } })} />
+        </ConfigField>
+        <ConfigField label="Vote" help="Duree en secondes de la phase de vote.">
+          <input type="number" value={config.durations.vote} onChange={(e) => update({ durations: { ...config.durations, vote: Number(e.target.value) } })} />
+        </ConfigField>
       </div>
       {!compact && (
         <>
@@ -469,6 +489,16 @@ function ConfigEditor({ config, onChange, compact = false }: { config: GameConfi
         </>
       )}
     </div>
+  );
+}
+
+function ConfigField({ label, help, children }: { label: string; help: string; children: React.ReactNode }) {
+  return (
+    <label className="config-field">
+      <span>{label}<span className="help-dot" title={help}>?</span></span>
+      {children}
+      <small>{help}</small>
+    </label>
   );
 }
 
@@ -589,13 +619,13 @@ function PowerNotice({ view }: { view: RoomView }) {
   return <p className="used-power">Pouvoir deja utilise : {used.map((power) => power.label).join(", ")}</p>;
 }
 
-function DebatePanel({ view, secondsLeft }: { view: RoomView; secondsLeft?: number }) {
+function DebatePanel({ view, timer }: { view: RoomView; timer?: TimerInfo }) {
   const speaker = view.players.find((player) => player.id === view.activePlayerId);
   return (
     <div className="content">
       <h2>{view.phase === "DAY_ANNOUNCEMENT" ? "Le jour se leve" : view.phase === "DEFENSE" ? "Defense individuelle" : "Debat en cours"}</h2>
       <p>Joueur qui parle : <strong>{speaker?.name ?? "discussion libre"}</strong></p>
-      <p>Temps restant : <strong>{secondsLeft !== undefined ? formatSeconds(secondsLeft) : "non chronometre"}</strong></p>
+      {timer ? <PhaseTimer timer={timer} compact /> : <p>Temps restant : <strong>non chronometre</strong></p>}
       {!view.you?.isMayor && <p className="muted">Le Maire controle la parole et le passage au vote.</p>}
     </div>
   );
@@ -640,12 +670,13 @@ function EndPanel({ view, onLeaveRoom }: { view: RoomView; onLeaveRoom: () => vo
   );
 }
 
-function MayorPanel({ view, alivePlayers }: { view: RoomView; alivePlayers: RoomView["players"] }) {
+function MayorPanel({ view, alivePlayers, timer }: { view: RoomView; alivePlayers: RoomView["players"]; timer?: TimerInfo }) {
   const [speechPlayer, setSpeechPlayer] = useState(alivePlayers[0]?.id ?? "");
   const speaker = view.players.find((player) => player.id === view.activePlayerId);
   return (
     <section className="hostbar mayorbar">
       <strong><Crown size={17} /> Panneau Maire</strong>
+      {timer && <span className={timer.urgent ? "timer-inline urgent" : "timer-inline"}>{timer.label} : {formatSeconds(timer.secondsLeft)}</span>}
       <select value={speechPlayer} onChange={(event) => setSpeechPlayer(event.target.value)}>{alivePlayers.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select>
       <button onClick={() => socket.emit("startDebate", { code: view.code })}>Debat global</button>
       <button disabled={!speechPlayer} onClick={() => socket.emit("grantSpeech", { code: view.code, playerId: speechPlayer })}>Defense</button>
@@ -709,12 +740,26 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function StatusPill({ view, secondsLeft }: { view: RoomView; secondsLeft?: number }) {
+function StatusPill({ view, timer }: { view: RoomView; timer?: TimerInfo }) {
   return (
     <div className="status">
       <span>{phaseLabel(view.phase)}</span>
       <span>Tour {view.round}</span>
-      {secondsLeft !== undefined && <span><Clock size={15} /> {formatSeconds(secondsLeft)}</span>}
+      {timer && <span className={timer.urgent ? "urgent" : ""}><Clock size={15} /> {timer.label} - {formatSeconds(timer.secondsLeft)}</span>}
+    </div>
+  );
+}
+
+function PhaseTimer({ timer, compact = false }: { timer: TimerInfo; compact?: boolean }) {
+  return (
+    <div className={timer.urgent ? `phase-timer urgent ${compact ? "compact" : ""}` : `phase-timer ${compact ? "compact" : ""}`}>
+      <div>
+        <span>{timer.label}</span>
+        <strong>{formatSeconds(timer.secondsLeft)} restantes</strong>
+      </div>
+      <div className="timer-track" aria-hidden="true">
+        <div style={{ width: `${timer.progress}%` }} />
+      </div>
     </div>
   );
 }
@@ -739,6 +784,33 @@ function persist(view: RoomView) {
 
 function currentPlayer(view: RoomView) {
   return view.players.find((player) => player.id === view.you?.id);
+}
+
+function getTimerInfo(view: RoomView, now: number): TimerInfo | undefined {
+  if (!view.timerEndsAt || !view.timerStartedAt || !view.timerDuration) return undefined;
+  const secondsLeft = Math.max(0, Math.ceil((view.timerEndsAt - now) / 1000));
+  const elapsed = Math.max(0, now - view.timerStartedAt);
+  const totalMs = Math.max(1, view.timerDuration * 1000);
+  const progress = Math.max(0, Math.min(100, 100 - (elapsed / totalMs) * 100));
+  return {
+    label: timerLabel(view),
+    secondsLeft,
+    duration: view.timerDuration,
+    progress,
+    urgent: secondsLeft <= Math.max(10, Math.ceil(view.timerDuration * 0.15))
+  };
+}
+
+function timerLabel(view: RoomView) {
+  if (view.phase === "NIGHT") return "Nuit";
+  if (view.phase === "DEBATE") return "Debat";
+  if (view.phase === "DEFENSE") {
+    const speaker = view.players.find((player) => player.id === view.activePlayerId);
+    return `Defense${speaker ? ` de ${speaker.name}` : ""}`;
+  }
+  if (view.phase === "VOTING") return "Vote";
+  if (view.phase === "RESULT") return "Prochaine phase";
+  return phaseLabel(view.phase);
 }
 
 function canHearRemote(view: RoomView, fromPlayerId: string) {

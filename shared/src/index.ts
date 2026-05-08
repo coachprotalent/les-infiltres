@@ -127,6 +127,8 @@ export type RoomView = {
   currentNightStep?: NightStep;
   activeRole?: Role;
   activePlayerId?: string;
+  timerStartedAt?: number;
+  timerDuration?: number;
   timerEndsAt?: number;
   votes: VoteRecord[];
   mayorVotes: VoteRecord[];

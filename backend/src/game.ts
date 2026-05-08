@@ -53,6 +53,8 @@ type Room = {
   narrator: string;
   transition?: RoomView["transition"];
   timer?: NodeJS.Timeout;
+  timerStartedAt?: number;
+  timerDuration?: number;
   timerEndsAt?: number;
   lastResult?: string;
   winner?: Winner;
@@ -241,6 +243,8 @@ export class GameStore {
     room.votes = [];
     room.mayorVotes = [];
     room.transition = undefined;
+    room.timerStartedAt = undefined;
+    room.timerDuration = undefined;
     room.timerEndsAt = undefined;
     room.lastResult = undefined;
     room.winner = undefined;
@@ -383,6 +387,8 @@ export class GameStore {
       if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
     });
     room.phase = "DEBATE";
+    room.timerStartedAt = undefined;
+    room.timerDuration = undefined;
     room.timerEndsAt = undefined;
     room.narrator = "Parole coupee. Discussion libre.";
     this.emit(room);
@@ -672,13 +678,19 @@ export class GameStore {
 
   private startTimer(room: Room, seconds: number, done: () => void) {
     this.clearTimer(room);
-    room.timerEndsAt = Date.now() + Math.max(5, seconds) * 1000;
-    room.timer = setTimeout(done, Math.max(5, seconds) * 1000);
+    const duration = Math.max(5, seconds);
+    const startedAt = Date.now();
+    room.timerStartedAt = startedAt;
+    room.timerDuration = duration;
+    room.timerEndsAt = startedAt + duration * 1000;
+    room.timer = setTimeout(done, duration * 1000);
   }
 
   private clearTimer(room: Room) {
     if (room.timer) clearTimeout(room.timer);
     room.timer = undefined;
+    room.timerStartedAt = undefined;
+    room.timerDuration = undefined;
     room.timerEndsAt = undefined;
   }
 
@@ -821,6 +833,8 @@ export class GameStore {
       currentNightStep: activeStep,
       activeRole,
       activePlayerId: room.players.find((p) => p.speaking)?.id,
+      timerStartedAt: room.timerStartedAt,
+      timerDuration: room.timerDuration,
       timerEndsAt: room.timerEndsAt,
       votes: room.phase === "VOTING" ? room.votes : [],
       mayorVotes: room.phase === "MAYOR_ELECTION" ? room.mayorVotes : [],

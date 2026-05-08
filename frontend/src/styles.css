@@ -187,6 +187,64 @@ p {
   align-items: center;
 }
 
+.status .urgent {
+  background: rgba(207, 78, 63, 0.2);
+  color: #ffd8d2;
+}
+
+.phase-timer {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(223, 185, 91, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  display: grid;
+  gap: 10px;
+}
+
+.phase-timer.compact {
+  margin-top: 0;
+}
+
+.phase-timer > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.phase-timer span {
+  color: #dfb95b;
+  font-weight: 800;
+}
+
+.phase-timer strong {
+  font-size: 20px;
+}
+
+.timer-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(242, 240, 231, 0.12);
+}
+
+.timer-track div {
+  height: 100%;
+  border-radius: inherit;
+  background: #5f9569;
+  transition: width 500ms linear, background-color 160ms ease;
+}
+
+.phase-timer.urgent {
+  border-color: rgba(207, 78, 63, 0.64);
+  animation: timerPulse 900ms ease-in-out infinite alternate;
+}
+
+.phase-timer.urgent .timer-track div {
+  background: #cf4e3f;
+}
+
 .stage {
   margin-bottom: 18px;
 }
@@ -408,6 +466,29 @@ p {
   font-size: 13px;
 }
 
+.config-field > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.config-field small {
+  color: #b9b09f;
+  line-height: 1.35;
+}
+
+.help-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(223, 185, 91, 0.45);
+  color: #dfb95b;
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .toggles {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -500,9 +581,18 @@ p {
   margin-top: 18px;
   padding: 12px;
   display: grid;
-  grid-template-columns: auto repeat(5, minmax(0, 1fr));
+  grid-template-columns: auto minmax(150px, 1fr) repeat(5, minmax(0, 1fr));
   gap: 8px;
   align-items: center;
+}
+
+.timer-inline {
+  color: #f4dfaa;
+  font-weight: 800;
+}
+
+.timer-inline.urgent {
+  color: #ffd8d2;
 }
 
 .mayorbar strong {
@@ -561,6 +651,15 @@ p {
   }
 }
 
+@keyframes timerPulse {
+  from {
+    box-shadow: 0 0 0 rgba(207, 78, 63, 0);
+  }
+  to {
+    box-shadow: 0 0 20px rgba(207, 78, 63, 0.18);
+  }
+}
+
 @media (max-width: 900px) {
   .home,
   .layout,
@@ -585,6 +684,11 @@ p {
   }
 
   .narrator {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .phase-timer > div:first-child {
     align-items: flex-start;
     flex-direction: column;
   }
