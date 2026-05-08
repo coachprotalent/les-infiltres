@@ -148,6 +148,12 @@ p {
   font-weight: 800;
 }
 
+.danger {
+  border-color: rgba(207, 78, 63, 0.72);
+  background: rgba(207, 78, 63, 0.18);
+  color: #ffd8d2;
+}
+
 .topbar {
   display: flex;
   justify-content: space-between;
@@ -481,6 +487,11 @@ p {
 
 .player.speaking {
   outline: 2px solid #dfb95b;
+}
+
+.player.audio-active {
+  outline: 2px solid #5f9569;
+  background: rgba(95, 149, 105, 0.16);
 }
 
 .hostbar {

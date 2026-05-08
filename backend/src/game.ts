@@ -13,6 +13,7 @@ type Player = {
   canSpeak: boolean;
   muted: boolean;
   speaking: boolean;
+  audioActive: boolean;
   isHost: boolean;
   socketId?: string;
   secretInfo: string[];
@@ -150,6 +151,7 @@ export class GameStore {
       if (player) {
         player.connected = false;
         player.speaking = false;
+        player.audioActive = false;
         this.emit(room);
       }
     }
@@ -181,6 +183,7 @@ export class GameStore {
     room.players.forEach((p) => {
       p.canVote = p.alive;
       p.canSpeak = p.alive;
+      p.audioActive = false;
       p.muted = room.audioMode === "integrated" ? !p.alive : p.muted;
     });
     room.narrator = "Roles distribues. Election publique du Maire : chaque joueur vote pour un Maire.";
@@ -215,6 +218,49 @@ export class GameStore {
     if (room.phase === "VOTING") return this.resolveVote(room);
     if (room.phase === "RESULT") return this.startNight(room);
     return this.reject(actorSocketId, "Aucune phase a debloquer maintenant.");
+  }
+
+  endGame(code: string, actorSocketId: string) {
+    const room = this.requireHost(code, actorSocketId);
+    if (!room) return;
+    if (room.phase === "GAME_OVER") return this.reject(actorSocketId, "La partie est deja terminee.");
+    this.finish(room, undefined, "Partie terminee par l'hote.");
+    this.emit(room);
+  }
+
+  returnToLobby(code: string, actorSocketId: string) {
+    const room = this.requireHost(code, actorSocketId);
+    if (!room) return;
+    if (room.phase !== "GAME_OVER") return this.reject(actorSocketId, "La partie doit etre terminee avant de revenir au lobby.");
+    this.clearTimer(room);
+    room.phase = "LOBBY";
+    room.round = 0;
+    room.mayorId = undefined;
+    room.reserveRoles = [];
+    room.night = emptyNight(false);
+    room.votes = [];
+    room.mayorVotes = [];
+    room.transition = undefined;
+    room.timerEndsAt = undefined;
+    room.lastResult = undefined;
+    room.winner = undefined;
+    room.revoteTargets = undefined;
+    room.powers = emptyPowers();
+    room.pastorAttemptedIds = new Set();
+    room.narrator = "Retour au lobby. En attente du lancement par l'hote.";
+    room.players.forEach((player) => {
+      player.role = undefined;
+      player.alive = true;
+      player.canVote = true;
+      player.canSpeak = true;
+      player.muted = false;
+      player.speaking = false;
+      player.audioActive = false;
+      player.secretInfo = [];
+      player.revealedRole = undefined;
+    });
+    this.log(room, "system", "Retour au lobby par l'hote.");
+    this.emit(room);
   }
 
   nightAction(code: string, actorSocketId: string, action: { targetId?: string; roleChoice?: Role; ministerAction?: "save" | "jail" }) {
@@ -318,6 +364,7 @@ export class GameStore {
     room.players.forEach((p) => {
       p.speaking = p.id === target.id;
       p.canSpeak = p.alive && p.id === target.id;
+      p.audioActive = false;
       p.muted = room.audioMode === "integrated" ? p.id !== target.id : p.muted;
     });
     this.startTimer(room, seconds ?? room.config.durations.defense, () => this.stopSpeech(room));
@@ -332,6 +379,7 @@ export class GameStore {
     room.players.forEach((p) => {
       p.speaking = false;
       p.canSpeak = p.alive;
+      p.audioActive = false;
       if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
     });
     room.phase = "DEBATE";
@@ -374,6 +422,18 @@ export class GameStore {
     if (!target.alive && (actor.id !== room.mayorId || !room.config.deadCanHearAudio)) return this.reject(actorSocketId, "Ce joueur ne peut pas utiliser l'audio.");
     if (!muted && !target.canSpeak) return this.reject(actorSocketId, "Ce joueur n'a pas le droit de parler maintenant.");
     target.muted = muted;
+    if (muted) target.audioActive = false;
+    this.emit(room);
+  }
+
+  audioActivity(code: string, actorSocketId: string, speaking: boolean) {
+    const room = this.getRoom(code);
+    const player = room?.players.find((p) => p.socketId === actorSocketId);
+    if (!room || !player || room.audioMode !== "integrated") return;
+    const canSpeakNow = room.phase !== "GAME_OVER" && player.canSpeak && !player.muted && player.alive;
+    const next = speaking && canSpeakNow;
+    if (player.audioActive === next) return;
+    player.audioActive = next;
     this.emit(room);
   }
 
@@ -419,6 +479,7 @@ export class GameStore {
       p.canVote = p.alive;
       p.canSpeak = false;
       p.speaking = false;
+      p.audioActive = false;
       if (room.audioMode === "integrated") p.muted = p.alive || !room.config.deadCanHearAudio;
     });
     room.night = emptyNight(room.round === 1);
@@ -491,6 +552,7 @@ export class GameStore {
     room.players.forEach((p) => {
       p.speaking = false;
       p.canSpeak = p.alive;
+      p.audioActive = false;
       if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
     });
     this.log(room, "phase", "Jour ouvert apres resolution de nuit.");
@@ -544,6 +606,7 @@ export class GameStore {
     player.canVote = false;
     player.canSpeak = false;
     player.speaking = false;
+    player.audioActive = false;
     player.revealedRole = player.role;
     player.muted = room.audioMode === "integrated" ? !room.config.deadCanHearAudio : player.muted;
     if (player.id === room.mayorId) room.mayorId = this.pickNextMayor(room);
@@ -559,18 +622,23 @@ export class GameStore {
     return false;
   }
 
-  private finish(room: Room, winner: Winner, message: string) {
+  private finish(room: Room, winner: Winner | undefined, message: string) {
     this.clearTimer(room);
     room.phase = "GAME_OVER";
     room.winner = winner;
     room.narrator = message;
     room.lastResult = message;
+    room.transition = undefined;
+    room.votes = [];
+    room.mayorVotes = [];
+    room.revoteTargets = undefined;
     room.players.forEach((p) => {
       p.canVote = false;
       p.canSpeak = false;
       p.speaking = false;
+      p.audioActive = false;
       p.revealedRole = p.role;
-      if (room.audioMode === "integrated") p.muted = false;
+      if (room.audioMode === "integrated") p.muted = true;
     });
     this.log(room, "system", message);
     return true;
@@ -586,12 +654,14 @@ export class GameStore {
       room.players.forEach((p) => {
         p.speaking = false;
         p.canSpeak = false;
+        p.audioActive = false;
         if (room.audioMode === "integrated") p.muted = p.alive || (!p.alive && !room.config.deadCanHearAudio);
       });
     } else if (phase === "DEBATE") {
       room.players.forEach((p) => {
         p.speaking = false;
         p.canSpeak = p.alive;
+        p.audioActive = false;
         if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
       });
     }
@@ -743,7 +813,7 @@ export class GameStore {
             secretInfo: [...secretInfo, ...infiltratorNames, ...ministerInfo, ...watcherInfo],
             powerStatuses: powerStatusesFor(player, room),
             nightChannel: nightChannelFor(player, room, activeStep),
-            canHearAudio: player.alive || room.config.deadCanHearAudio || room.phase === "GAME_OVER"
+            canHearAudio: room.audioMode === "integrated" && room.phase !== "GAME_OVER" && (player.alive || room.config.deadCanHearAudio)
           }
         : undefined,
       narrator: room.narrator,
@@ -791,6 +861,7 @@ function createPlayer(name: string, socketId: string, sessionId: string, isHost:
     canSpeak: true,
     muted: false,
     speaking: false,
+    audioActive: false,
     isHost,
     socketId,
     secretInfo: []
@@ -808,6 +879,7 @@ function publicPlayer(player: Player, room: Room, activeStep?: NightStep): Playe
     canAct: canActFor(player, room, activeStep),
     muted: player.muted,
     speaking: player.speaking,
+    audioActive: player.audioActive,
     isHost: player.isHost,
     isMayor: player.id === room.mayorId,
     revealedRole: player.revealedRole
@@ -860,6 +932,7 @@ function applyIntegratedAudioState(room: Room) {
       const canSpeakAtNight = player.alive && activeStep === "infiltres" && player.role === "Infiltre";
       player.canSpeak = canSpeakAtNight;
       player.speaking = false;
+      player.audioActive = false;
       player.muted = !canSpeakAtNight;
     });
   }

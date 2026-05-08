@@ -58,6 +58,8 @@ io.on("connection", (socket) => {
   socket.on("startGame", ({ code }) => store.startGame(code, socket.id));
   socket.on("electMayor", ({ code, targetId }) => store.electMayor(code, socket.id, targetId));
   socket.on("adminNext", ({ code }) => store.adminNext(code, socket.id));
+  socket.on("endGame", ({ code }) => store.endGame(code, socket.id));
+  socket.on("returnToLobby", ({ code }) => store.returnToLobby(code, socket.id));
   socket.on("nightAction", ({ code, ...action }) => store.nightAction(code, socket.id, action));
   socket.on("startDebate", ({ code, seconds }) => store.startDebate(code, socket.id, seconds));
   socket.on("grantSpeech", ({ code, playerId, seconds }) => store.grantSpeech(code, socket.id, playerId, seconds));
@@ -65,6 +67,7 @@ io.on("connection", (socket) => {
   socket.on("startVote", ({ code, seconds }) => store.startVote(code, socket.id, seconds));
   socket.on("vote", ({ code, targetId }) => store.vote(code, socket.id, targetId));
   socket.on("setMuted", ({ code, playerId, muted }) => store.setMuted(code, socket.id, playerId, muted));
+  socket.on("audioActivity", ({ code, speaking }) => store.audioActivity(code, socket.id, speaking));
   socket.on("rtcSignal", ({ code, to, signal }) => {
     const fromView = store.viewBySocket(code, socket.id);
     if (!fromView?.you) return;

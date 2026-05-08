@@ -12,6 +12,7 @@ type PeerEntry = {
   connection: RTCPeerConnection;
   audio?: HTMLAudioElement;
 };
+type AudioPermission = "idle" | "requesting" | "granted" | "denied" | "missing" | "unsupported";
 
 const socket: AppSocket = io("/", { autoConnect: true });
 const sessionKey = "les-infiltres-session";
@@ -93,10 +94,15 @@ function App() {
     );
   }
 
-  return <Game view={view} toast={toast} onToast={setToast} />;
+  const leaveRoom = () => {
+    localStorage.removeItem(roomKey);
+    setView(null);
+  };
+
+  return <Game view={view} toast={toast} onToast={setToast} onLeaveRoom={leaveRoom} />;
 }
 
-function Game({ view, toast, onToast }: { view: RoomView; toast: string; onToast: (message: string) => void }) {
+function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: string; onToast: (message: string) => void; onLeaveRoom: () => void }) {
   const [now, setNow] = useState(Date.now());
   const [voiceEnabled, setVoiceEnabled] = useState(() => localStorage.getItem("les-infiltres-voice") === "on");
   const audio = useIntegratedAudio(view, onToast);
@@ -169,7 +175,7 @@ function Game({ view, toast, onToast }: { view: RoomView; toast: string; onToast
           {["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(view.phase) && <DebatePanel view={view} secondsLeft={secondsLeft} />}
           {view.phase === "VOTING" && <VotePanel view={view} />}
           {view.phase === "RESULT" && <ResultPanel view={view} />}
-          {view.phase === "GAME_OVER" && <EndPanel view={view} />}
+          {view.phase === "GAME_OVER" && <EndPanel view={view} onLeaveRoom={onLeaveRoom} />}
         </section>
 
         <aside className="panel side-panel">
@@ -177,7 +183,7 @@ function Game({ view, toast, onToast }: { view: RoomView; toast: string; onToast
           <h2><Users size={18} /> Joueurs</h2>
           <div className="players">
             {view.players.map((player) => (
-              <div className={`player ${player.alive ? "" : "out"} ${player.speaking ? "speaking" : ""}`} key={player.id}>
+              <div className={`player ${player.alive ? "" : "out"} ${player.speaking ? "speaking" : ""} ${player.audioActive ? "audio-active" : ""}`} key={player.id}>
                 <span>{player.name}{player.isMayor ? " - Maire" : ""}{player.isHost ? " - Hote" : ""}</span>
                 <small>
                   {player.connected ? "en ligne" : "deconnecte"}
@@ -199,15 +205,24 @@ function Game({ view, toast, onToast }: { view: RoomView; toast: string; onToast
 
 function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) {
   const [enabled, setEnabled] = useState(false);
-  const [permission, setPermission] = useState<"idle" | "requesting" | "granted" | "denied">("idle");
+  const [permission, setPermission] = useState<AudioPermission>("idle");
   const [peerCount, setPeerCount] = useState(0);
   const localStreamRef = useRef<MediaStream | null>(null);
   const peersRef = useRef(new Map<string, PeerEntry>());
   const viewRef = useRef(view);
+  const activityFrameRef = useRef<number | undefined>(undefined);
+  const audioContextRef = useRef<AudioContext | undefined>(undefined);
+  const lastActivityRef = useRef(false);
 
   viewRef.current = view;
 
   const stopAudio = () => {
+    if (activityFrameRef.current) window.cancelAnimationFrame(activityFrameRef.current);
+    activityFrameRef.current = undefined;
+    void audioContextRef.current?.close();
+    audioContextRef.current = undefined;
+    if (lastActivityRef.current) socket.emit("audioActivity", { code: viewRef.current.code, speaking: false });
+    lastActivityRef.current = false;
     for (const peer of peersRef.current.values()) {
       peer.audio?.remove();
       peer.connection.close();
@@ -218,6 +233,37 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
     localStreamRef.current = null;
     setEnabled(false);
     setPermission("idle");
+  };
+
+  const setLocalActivity = (speaking: boolean) => {
+    if (lastActivityRef.current === speaking) return;
+    lastActivityRef.current = speaking;
+    socket.emit("audioActivity", { code: viewRef.current.code, speaking });
+  };
+
+  const startActivityMeter = (stream: MediaStream) => {
+    if (!window.AudioContext) return;
+    const context = new AudioContext();
+    audioContextRef.current = context;
+    const source = context.createMediaStreamSource(stream);
+    const analyser = context.createAnalyser();
+    const data = new Uint8Array(analyser.fftSize);
+    source.connect(analyser);
+    const tick = () => {
+      const current = viewRef.current;
+      const player = currentPlayer(current);
+      const canTransmit = current.audioMode === "integrated" && current.phase !== "GAME_OVER" && !!current.you?.canHearAudio && !!current.you.canSpeak && !player?.muted;
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const value of data) {
+        const normalized = (value - 128) / 128;
+        sum += normalized * normalized;
+      }
+      const volume = Math.sqrt(sum / data.length);
+      setLocalActivity(canTransmit && volume > 0.035);
+      activityFrameRef.current = window.requestAnimationFrame(tick);
+    };
+    tick();
   };
 
   const ensurePeer = (peerId: string, initiator: boolean) => {
@@ -254,27 +300,46 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
 
   const startAudio = async () => {
     if (view.audioMode !== "integrated") return;
+    if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
+      setPermission("unsupported");
+      onToast("Navigateur non compatible avec l'audio integre.");
+      return;
+    }
     setPermission("requesting");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      if (!stream.getAudioTracks().length) {
+        stream.getTracks().forEach((track) => track.stop());
+        setPermission("missing");
+        onToast("Aucun micro detecte.");
+        return;
+      }
       localStreamRef.current = stream;
       setEnabled(true);
       setPermission("granted");
-    } catch {
-      setPermission("denied");
-      onToast("Permission micro refusee.");
+      startActivityMeter(stream);
+    } catch (error) {
+      const name = error instanceof DOMException ? error.name : "";
+      if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        setPermission("missing");
+        onToast("Aucun micro detecte.");
+      } else {
+        setPermission("denied");
+        onToast("Permission micro refusee.");
+      }
     }
   };
 
   useEffect(() => {
-    if (view.audioMode !== "integrated" && enabled) stopAudio();
-  }, [view.audioMode, enabled]);
+    if ((view.audioMode !== "integrated" || view.phase === "GAME_OVER") && enabled) stopAudio();
+  }, [view.audioMode, view.phase, enabled]);
 
   useEffect(() => {
     const canTransmit = view.audioMode === "integrated" && enabled && !!view.you?.canHearAudio && !!view.you.canSpeak && !currentPlayer(view)?.muted;
     localStreamRef.current?.getAudioTracks().forEach((track) => {
       track.enabled = canTransmit;
     });
+    if (!canTransmit) setLocalActivity(false);
     for (const [peerId, peer] of peersRef.current.entries()) {
       if (peer.audio) peer.audio.muted = !canHearRemote(view, peerId);
     }
@@ -283,7 +348,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
   useEffect(() => {
     if (!enabled || view.audioMode !== "integrated" || !view.you || !localStreamRef.current) return;
     const peerIds = view.players.filter((player) => player.connected && player.id !== view.you?.id).map((player) => player.id);
-    for (const peerId of peerIds) ensurePeer(peerId, view.you.id < peerId);
+    for (const peerId of peerIds) ensurePeer(peerId, true);
     for (const [peerId, peer] of peersRef.current.entries()) {
       if (!peerIds.includes(peerId)) {
         peer.audio?.remove();
@@ -560,12 +625,16 @@ function ResultPanel({ view }: { view: RoomView }) {
   );
 }
 
-function EndPanel({ view }: { view: RoomView }) {
+function EndPanel({ view, onLeaveRoom }: { view: RoomView; onLeaveRoom: () => void }) {
   return (
     <div className="content">
       <h2>Fin de partie</h2>
-      <p>Victoire : <strong>{view.winner}</strong></p>
+      {view.winner ? <p>Victoire : <strong>{view.winner}</strong></p> : <p><strong>Partie terminee par l'hote.</strong></p>}
       <p>{view.narrator}</p>
+      <div className="actions-row">
+        {view.you?.isHost && <button className="primary" onClick={() => socket.emit("returnToLobby", { code: view.code })}>Retour au lobby</button>}
+        <button onClick={onLeaveRoom}>Créer une nouvelle partie</button>
+      </div>
       {view.gameLog && <GameLog entries={view.gameLog} />}
     </div>
   );
@@ -588,10 +657,15 @@ function MayorPanel({ view, alivePlayers }: { view: RoomView; alivePlayers: Room
 }
 
 function AdminPanel({ view }: { view: RoomView }) {
+  const confirmEndGame = () => {
+    if (window.confirm("Mettre fin a la partie pour tous les joueurs ?")) socket.emit("endGame", { code: view.code });
+  };
   return (
     <section className="adminbar">
       <strong>Admin hote</strong>
-      <button onClick={() => socket.emit("adminNext", { code: view.code })}>Debloquer la phase</button>
+      {view.phase !== "GAME_OVER" && <button onClick={() => socket.emit("adminNext", { code: view.code })}>Debloquer la phase</button>}
+      {view.phase !== "LOBBY" && view.phase !== "GAME_OVER" && <button className="danger" onClick={confirmEndGame}>Mettre fin a la partie</button>}
+      {view.phase === "GAME_OVER" && <button className="primary" onClick={() => socket.emit("returnToLobby", { code: view.code })}>Retour au lobby</button>}
       {view.gameLog && <details><summary>Journal</summary><GameLog entries={view.gameLog} /></details>}
     </section>
   );
@@ -608,12 +682,12 @@ function AudioPanel({ view, audio }: { view: RoomView; audio: ReturnType<typeof 
   return (
     <div className="audio">
       <h2><Shield size={18} /> Audio</h2>
-      <p>{view.audioMode === "external" ? "Audio du jeu desactive. Utilisez WhatsApp, Discord ou un autre canal." : you.canHearAudio ? "Audio integre actif selon les permissions serveur." : "Audio coupe pour les spectateurs elimines."}</p>
+      <p>{view.audioMode === "external" ? "Audio externe selectionne. Utilisez WhatsApp, Discord ou un autre canal." : you.canHearAudio ? "Audio integre actif selon les permissions serveur." : "Audio coupe pour cette phase."}</p>
       {view.audioMode === "integrated" && (
         <>
           <div className="actions-row audio-actions">
             <button disabled={!you.canHearAudio || audio.permission === "requesting"} onClick={audio.enabled ? audio.stopAudio : audio.startAudio}>
-              {audio.enabled ? <MicOff size={17} /> : <Mic size={17} />} {audio.enabled ? "Couper audio" : "Activer micro"}
+              {audio.enabled ? <MicOff size={17} /> : <Mic size={17} />} {audio.enabled ? "Couper audio" : "Activer mon micro"}
             </button>
             <button disabled={!you.canHearAudio || !audio.enabled} onClick={() => socket.emit("setMuted", { code: view.code, playerId: you.id, muted: !muted })}>
               {muted ? <MicOff size={17} /> : <Mic size={17} />} {muted ? "Unmute" : "Mute"}
@@ -669,6 +743,7 @@ function currentPlayer(view: RoomView) {
 
 function canHearRemote(view: RoomView, fromPlayerId: string) {
   if (view.audioMode !== "integrated" || !view.you?.canHearAudio) return false;
+  if (view.phase === "LOBBY") return true;
   if (view.phase === "NIGHT") return view.currentNightStep === "infiltres" && view.you.role === "Infiltre";
   if (view.phase === "DEFENSE") return view.activePlayerId === fromPlayerId;
   if (view.phase === "DAY_ANNOUNCEMENT" || view.phase === "DEBATE") return true;
@@ -677,6 +752,8 @@ function canHearRemote(view: RoomView, fromPlayerId: string) {
 
 function audioStatusText(audio: ReturnType<typeof useIntegratedAudio>, muted: boolean, canSpeak: boolean) {
   if (audio.permission === "requesting") return "Demande de permission micro...";
+  if (audio.permission === "unsupported") return "Navigateur non compatible avec l'audio integre.";
+  if (audio.permission === "missing") return "Aucun micro detecte.";
   if (audio.permission === "denied") return "Micro refuse par le navigateur.";
   if (!audio.enabled) return "Le micro n'est pas connecte.";
   if (muted || !canSpeak) return "Micro connecte, parole coupee par les regles.";

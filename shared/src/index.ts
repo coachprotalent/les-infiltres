@@ -68,6 +68,7 @@ export type PlayerPublic = {
   canAct: boolean;
   muted: boolean;
   speaking: boolean;
+  audioActive: boolean;
   isHost: boolean;
   isMayor: boolean;
   revealedRole?: Role;
@@ -143,6 +144,8 @@ export type ClientToServerEvents = {
   startGame: (payload: { code: string }) => void;
   electMayor: (payload: { code: string; targetId: string }) => void;
   adminNext: (payload: { code: string }) => void;
+  endGame: (payload: { code: string }) => void;
+  returnToLobby: (payload: { code: string }) => void;
   nightAction: (payload: { code: string; targetId?: string; roleChoice?: Role; ministerAction?: "save" | "jail" }) => void;
   startDebate: (payload: { code: string; seconds?: number }) => void;
   grantSpeech: (payload: { code: string; playerId: string; seconds?: number }) => void;
@@ -150,6 +153,7 @@ export type ClientToServerEvents = {
   startVote: (payload: { code: string; seconds?: number }) => void;
   vote: (payload: { code: string; targetId: string }) => void;
   setMuted: (payload: { code: string; playerId: string; muted: boolean }) => void;
+  audioActivity: (payload: { code: string; speaking: boolean }) => void;
   rtcSignal: (payload: { code: string; to: string; signal: unknown }) => void;
 };
 
