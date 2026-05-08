@@ -659,22 +659,22 @@ function ConfigEditor({ config, onChange, compact = false }: { config: GameConfi
       <h3><Settings size={16} /> Configuration avancee</h3>
       <div className="config-grid">
         <ConfigField label="Max joueurs" help="Nombre maximum de joueurs autorises dans la partie.">
-          <input type="number" min={7} max={20} value={config.maxPlayers} onChange={(e) => update({ maxPlayers: Number(e.target.value) })} />
+          <NumericConfigInput value={config.maxPlayers} min={7} max={20} onCommit={(value) => update({ maxPlayers: value })} />
         </ConfigField>
         <ConfigField label="Egalite" help="Regle appliquee si un vote finit a egalite. Aucun elimine signifie que personne n'est emprisonne.">
           <select value={config.tieRule} onChange={(e) => update({ tieRule: e.target.value === "revote" ? "revote" : "none" })}><option value="none">Aucun elimine</option><option value="revote">Revote</option></select>
         </ConfigField>
         <ConfigField label="Nuit" help="Duree en secondes de la phase de nuit.">
-          <input type="number" value={config.durations.night} onChange={(e) => update({ durations: { ...config.durations, night: Number(e.target.value) } })} />
+          <NumericConfigInput value={config.durations.night} min={15} max={1800} step={5} onCommit={(value) => update({ durations: { ...config.durations, night: value } })} />
         </ConfigField>
         <ConfigField label="Debat" help="Duree en secondes du debat general pendant la journee.">
-          <input type="number" value={config.durations.freeDebate} onChange={(e) => update({ durations: { ...config.durations, freeDebate: Number(e.target.value) } })} />
+          <NumericConfigInput value={config.durations.freeDebate} min={15} max={3600} step={5} onCommit={(value) => update({ durations: { ...config.durations, freeDebate: value } })} />
         </ConfigField>
         <ConfigField label="Defense" help="Duree en secondes accordee a un joueur pour se defendre.">
-          <input type="number" value={config.durations.defense} onChange={(e) => update({ durations: { ...config.durations, defense: Number(e.target.value) } })} />
+          <NumericConfigInput value={config.durations.defense} min={10} max={600} step={5} onCommit={(value) => update({ durations: { ...config.durations, defense: value } })} />
         </ConfigField>
         <ConfigField label="Vote" help="Duree en secondes de la phase de vote.">
-          <input type="number" value={config.durations.vote} onChange={(e) => update({ durations: { ...config.durations, vote: Number(e.target.value) } })} />
+          <NumericConfigInput value={config.durations.vote} min={10} max={600} step={5} onCommit={(value) => update({ durations: { ...config.durations, vote: value } })} />
         </ConfigField>
       </div>
       {!compact && (
@@ -692,6 +692,78 @@ function ConfigEditor({ config, onChange, compact = false }: { config: GameConfi
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function NumericConfigInput({ value, min, max, step = 1, onCommit }: { value: number; min: number; max: number; step?: number; onCommit: (value: number) => void }) {
+  const [inputValue, setInputValue] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!editing) setInputValue(String(value));
+  }, [value, editing]);
+
+  const commit = (rawValue = inputValue) => {
+    const raw = rawValue.trim();
+    if (!raw) {
+      setInputValue(String(value));
+      setError("Valeur requise");
+      return;
+    }
+    if (!/^\d+$/.test(raw)) {
+      setInputValue(String(value));
+      setError("Nombre invalide");
+      return;
+    }
+    const numeric = Number(raw);
+    if (numeric < min) {
+      setInputValue(String(min));
+      setError(`Minimum : ${min}`);
+      onCommit(min);
+      return;
+    }
+    if (numeric > max) {
+      setInputValue(String(max));
+      setError(`Maximum : ${max}`);
+      onCommit(max);
+      return;
+    }
+    setInputValue(String(numeric));
+    setError("");
+    onCommit(numeric);
+  };
+
+  const bump = (delta: number) => {
+    const parsed = /^\d+$/.test(inputValue.trim()) ? Number(inputValue.trim()) : value;
+    const next = Math.min(max, Math.max(min, parsed + delta));
+    setEditing(false);
+    setInputValue(String(next));
+    setError("");
+    onCommit(next);
+  };
+
+  return (
+    <div className="numeric-config">
+      <button type="button" aria-label="Diminuer" onClick={() => bump(-step)}>-</button>
+      <input
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        value={inputValue}
+        onFocus={() => setEditing(true)}
+        onChange={(event) => {
+          setInputValue(event.target.value);
+          setError("");
+        }}
+        onBlur={() => {
+          setEditing(false);
+          commit();
+        }}
+      />
+      <button type="button" aria-label="Augmenter" onClick={() => bump(step)}>+</button>
+      {error && <small className="field-error">{error}</small>}
     </div>
   );
 }
