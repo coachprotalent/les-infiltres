@@ -129,6 +129,7 @@ npm run dev
 ```
 
 Lance `shared`, `backend` et `frontend` en mode développement.
+Le script compile d'abord `shared` une fois pour générer `shared/dist`, puis démarre les watchers. Cette étape évite les erreurs de résolution de `@les-infiltres/shared` sur un clone propre.
 
 ```bash
 npm run build
