@@ -544,7 +544,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
 
   useEffect(() => {
     if (!enabled || view.audioMode !== "integrated" || !view.you || !localStreamRef.current) return;
-    const peerIds = view.players.filter((player) => player.connected && player.id !== view.you?.id).map((player) => player.id);
+    const peerIds = view.you.audioPeerIds;
     for (const peerId of peerIds) ensurePeer(peerId, true);
     for (const [peerId, peer] of peersRef.current.entries()) {
       if (!peerIds.includes(peerId)) {
@@ -554,7 +554,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
         setPeerCount(peersRef.current.size);
       }
     }
-  }, [view.players, view.audioMode, view.you?.id, enabled]);
+  }, [view.you?.audioPeerIds.join(","), view.audioMode, view.you?.id, enabled]);
 
   useEffect(() => {
     const onSignal = async ({ from, signal }: { from: string; signal: unknown }) => {
@@ -896,8 +896,24 @@ function NightPanel({ view }: { view: RoomView }) {
       <PowerNotice view={view} />
       <SelectTarget value={targetId} onChange={setTargetId} players={targets} />
       {view.currentNightStep === "infiltres" && <p className="muted">Seuls les Infiltres voient cette interface et designent une victime commune.</p>}
+      {view.currentNightStep === "infiltres" && <InfiltratorVoteBoard view={view} />}
       <button className="primary" disabled={!targetId} onClick={() => socket.emit("nightAction", { code: view.code, targetId })}>Valider</button>
     </ActionBlock>
+  );
+}
+
+function InfiltratorVoteBoard({ view }: { view: RoomView }) {
+  const votes = view.infiltratorVotes ?? [];
+  return (
+    <div className="vote-ledger private-ledger">
+      <h3>Choix des Infiltres</h3>
+      {votes.length ? (
+        votes.map((vote) => <p key={vote.voterId}><strong>{vote.voterName}</strong> cible <strong>{vote.targetName}</strong></p>)
+      ) : (
+        <p className="muted">Aucun choix enregistre.</p>
+      )}
+      {view.infiltratorVoteLeader && <p>Total actuel : <strong>{view.infiltratorVoteLeader.targetName}</strong> ({view.infiltratorVoteLeader.total})</p>}
+    </div>
   );
 }
 
@@ -925,10 +941,37 @@ function VotePanel({ view }: { view: RoomView }) {
   return (
     <div className="content">
       <h2>Vote</h2>
-      <p>{view.votes.length} vote(s) enregistres. Le Maire a une voix double. Le Sage pese aussi double au depouillement.</p>
+      <p>{view.votes.length} vote(s) enregistres. Le Sage vaut 2 voix. Le Maire ajoute +1 voix ; un Sage Maire vaut donc 3 voix.</p>
       <SelectTarget value={targetId} onChange={setTargetId} players={view.players.filter((player) => player.alive && player.id !== view.you?.id)} />
       <button className="primary" disabled={!targetId || !canVote} onClick={() => socket.emit("vote", { code: view.code, targetId })}><Vote size={18} /> Voter</button>
       {!canVote && <p className="muted">Vous ne pouvez pas voter a cette phase.</p>}
+      <PublicVoteBoard view={view} />
+    </div>
+  );
+}
+
+function PublicVoteBoard({ view }: { view: RoomView }) {
+  return (
+    <div className="vote-ledger">
+      <h3>Votes publics</h3>
+      {view.voteDetails.length ? (
+        view.voteDetails.map((vote) => (
+          <p key={vote.voterId}>
+            <strong>{vote.voterName}</strong> vote contre <strong>{vote.targetName}</strong>
+            {vote.mayorBonus && " - voix du Maire +1"}
+            {vote.sageBonus && " - voix du Sage x2"}
+            {" "}({vote.weight} voix)
+          </p>
+        ))
+      ) : (
+        <p className="muted">Aucun vote enregistre.</p>
+      )}
+      {!!view.voteTotals.length && (
+        <div className="vote-totals">
+          <strong>Total</strong>
+          {view.voteTotals.map((total) => <span key={total.targetId}>{total.targetName} : {total.total}</span>)}
+        </div>
+      )}
     </div>
   );
 }
@@ -1102,7 +1145,7 @@ function timerLabel(view: RoomView) {
 }
 
 function canHearRemote(view: RoomView, fromPlayerId: string) {
-  if (view.audioMode !== "integrated" || !view.you?.canHearAudio) return false;
+  if (view.audioMode !== "integrated" || !view.you?.canHearAudio || !view.you.audioPeerIds.includes(fromPlayerId)) return false;
   if (view.phase === "LOBBY") return true;
   if (view.phase === "NIGHT") return view.currentNightStep === "infiltres" && view.you.role === "Infiltre";
   if (view.phase === "DEFENSE") return view.activePlayerId === fromPlayerId;

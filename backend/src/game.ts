@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { AdminRoomDetails, AdminRoomSummary, AudioMode, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, VoteRecord, Winner } from "@les-infiltres/shared";
+import type { AdminRoomDetails, AdminRoomSummary, AudioMode, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
 import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, mergeConfig } from "@les-infiltres/shared";
 
 type Player = {
@@ -27,6 +27,8 @@ type NightState = {
   protectedId?: string;
   silencedId?: string;
   infiltratorVictimId?: string;
+  ministerSavedVictimId?: string;
+  ministerJailId?: string;
   infiltratorVotes: Map<string, string>;
 };
 
@@ -424,7 +426,7 @@ export class GameStore {
       const target = alive.find((p) => p.id === action.targetId && p.role !== "Infiltre");
       if (!target) return this.reject(actorSocketId, "Les Infiltres doivent cibler un joueur vivant qui n'est pas Infiltre.");
       room.night.infiltratorVotes.set(actor.id, target.id);
-      room.night.infiltratorVictimId = target.id;
+      room.night.infiltratorVictimId = infiltratorVoteLeader(room)?.targetId ?? target.id;
       this.log(room, "action", `${actor.name} designe une victime des Infiltres.`);
       const infiltrators = alive.filter((p) => p.role === "Infiltre").length;
       if (room.night.infiltratorVotes.size >= Math.max(1, infiltrators)) return this.completeStep(room, step);
@@ -435,6 +437,7 @@ export class GameStore {
       if (!action.ministerAction) return this.completeStep(room, step);
       if (action.ministerAction === "save") {
         if (room.powers.ministerSaveUsed) return this.reject(actorSocketId, "Pouvoir deja utilise.");
+        room.night.ministerSavedVictimId = room.night.infiltratorVictimId;
         room.night.infiltratorVictimId = undefined;
         room.powers.ministerSaveUsed = true;
         actor.secretInfo.push("Vous avez utilise votre sauvegarde unique.");
@@ -443,7 +446,7 @@ export class GameStore {
       }
       if (action.ministerAction === "jail" && action.targetId && alive.some((p) => p.id === action.targetId)) {
         if (room.powers.ministerJailUsed) return this.reject(actorSocketId, "Pouvoir deja utilise.");
-        room.night.infiltratorVictimId = action.targetId;
+        room.night.ministerJailId = action.targetId;
         room.powers.ministerJailUsed = true;
         actor.secretInfo.push("Vous avez utilise votre emprisonnement unique.");
         this.log(room, "power", `${actor.name} utilise l'emprisonnement du Ministre.`);
@@ -558,6 +561,14 @@ export class GameStore {
     return this.getRoom(code)?.players.find((p) => p.id === playerId)?.socketId;
   }
 
+  canRelayRtcSignal(code: string, fromSocketId: string, toPlayerId: string) {
+    const room = this.getRoom(code);
+    const from = room?.players.find((p) => p.socketId === fromSocketId);
+    const to = room?.players.find((p) => p.id === toPlayerId);
+    if (!room || !from || !to || room.audioMode !== "integrated") return false;
+    return canHearPlayer(to, from, room) || canHearPlayer(from, to, room);
+  }
+
   viewBySocket(code: string, socketId: string) {
     const room = this.getRoom(code);
     const player = room?.players.find((p) => p.socketId === socketId);
@@ -642,24 +653,36 @@ export class GameStore {
   private resolveNight(room: Room) {
     this.clearTimer(room);
     const victim = room.night.infiltratorVictimId ? room.players.find((p) => p.id === room.night.infiltratorVictimId) : undefined;
+    const ministerSavedVictim = room.night.ministerSavedVictimId ? room.players.find((p) => p.id === room.night.ministerSavedVictimId) : undefined;
+    const ministerJailed = room.night.ministerJailId ? room.players.find((p) => p.id === room.night.ministerJailId) : undefined;
     const protectedVictim = victim && victim.id === room.night.protectedId;
     const pastorSaved = victim?.role === "Pasteur" && !this.hasPastorSecondAttempt(room, victim.id);
-    let result = "Aucun joueur n'a ete emprisonne pendant la nuit.";
+    const morningEvents: string[] = [];
     if (victim && !protectedVictim && !pastorSaved) {
       this.eliminate(room, victim, "nuit");
-      result = `${victim.name} a ete emprisonne pendant la nuit. Son role etait ${ROLE_LABELS[victim.role ?? "Croyant"]}.`;
+      morningEvents.push(`${victim.name} a ete emprisonne pendant la nuit. Son role etait ${ROLE_LABELS[victim.role ?? "Croyant"]}.`);
     } else if (victim?.role === "Pasteur" && !protectedVictim && pastorSaved) {
       room.pastorAttemptedIds.add(victim.id);
       this.log(room, "action", "Premiere tentative secrete contre le Pasteur.");
+    } else if (victim && protectedVictim) {
+      morningEvents.push("La victime des Infiltres a ete protegee pendant la nuit.");
+    }
+    if (ministerSavedVictim) {
+      morningEvents.push(`Le Ministre a sauve ${ministerSavedVictim.name} pendant la nuit.`);
+    }
+    if (ministerJailed?.alive) {
+      this.eliminate(room, ministerJailed, "nuit");
+      morningEvents.push(`Le Ministre a emprisonne ${ministerJailed.name}. Son role etait ${ROLE_LABELS[ministerJailed.role ?? "Croyant"]}.`);
     }
     if (room.night.silencedId) {
       const silenced = room.players.find((p) => p.id === room.night.silencedId && p.alive);
       if (silenced) silenced.canVote = false;
     }
+    const result = morningEvents.length ? morningEvents.join(" ") : "Aucun joueur n'a ete emprisonne pendant la nuit.";
     room.phase = "DAY_ANNOUNCEMENT";
     room.transition = "day-rises";
     room.lastResult = result;
-    room.narrator = `${result} ${this.silencedText(room)} Le jour se leve. Le Maire peut ouvrir le debat.`;
+    room.narrator = `Le jour se leve. ${result} ${this.silencedText(room)} Le Maire peut ouvrir le debat.`;
     room.players.forEach((p) => {
       p.speaking = false;
       p.canSpeak = p.alive;
@@ -817,8 +840,7 @@ export class GameStore {
   }
 
   private hasPastorSecondAttempt(room: Room, pastorId: string) {
-    const currentNightDesignations = [...room.night.infiltratorVotes.values()].filter((targetId) => targetId === pastorId).length;
-    return room.pastorAttemptedIds.has(pastorId) || currentNightDesignations >= 2;
+    return room.pastorAttemptedIds.has(pastorId);
   }
 
   private pickNextMayor(room: Room) {
@@ -929,7 +951,7 @@ export class GameStore {
       round: room.round,
       config: room.config,
       lobby: lobbyInfo(room.players.length, room.config),
-      players: room.players.map((p) => publicPlayer(p, room, activeStep)),
+      players: room.players.map((p) => publicPlayer(p, room, activeStep, player)),
       you: player
         ? {
             id: player.id,
@@ -945,19 +967,24 @@ export class GameStore {
             secretInfo: [...secretInfo, ...infiltratorNames, ...ministerInfo, ...watcherInfo],
             powerStatuses: powerStatusesFor(player, room),
             nightChannel: nightChannelFor(player, room, activeStep),
-            canHearAudio: room.audioMode === "integrated" && room.phase !== "GAME_OVER" && (player.alive || room.config.deadCanHearAudio)
+            canHearAudio: canUseIntegratedAudio(player, room),
+            audioPeerIds: audioPeerIdsFor(player, room)
           }
         : undefined,
       narrator: room.narrator,
       transition: room.transition,
       currentNightStep: activeStep,
       activeRole,
-      activePlayerId: room.players.find((p) => p.speaking)?.id,
+      activePlayerId: visibleActivePlayerId(room, player),
       timerStartedAt: room.timerStartedAt,
       timerDuration: room.timerDuration,
       timerEndsAt: room.timerEndsAt,
       votes: room.phase === "VOTING" ? room.votes : [],
+      voteDetails: room.phase === "VOTING" ? voteDetailsFor(room.votes, room, true) : [],
+      voteTotals: room.phase === "VOTING" ? voteTotalsFor(room.votes, room, true) : [],
       mayorVotes: room.phase === "MAYOR_ELECTION" ? room.mayorVotes : [],
+      infiltratorVotes: canSeeInfiltratorVotes(player, room, activeStep) ? infiltratorVoteDetails(room) : undefined,
+      infiltratorVoteLeader: canSeeInfiltratorVotes(player, room, activeStep) ? infiltratorVoteLeader(room) : undefined,
       lastResult: room.lastResult,
       winner: room.winner,
       roleOptions: activeStep === "agent-double" && player?.role === "AgentDouble" && !room.powers.agentDoubleUsed ? room.reserveRoles.slice(0, 2) : undefined,
@@ -1002,18 +1029,19 @@ function createPlayer(name: string, socketId: string, sessionId: string, isHost:
   };
 }
 
-function publicPlayer(player: Player, room: Room, activeStep?: NightStep): PlayerPublic {
+function publicPlayer(player: Player, room: Room, activeStep?: NightStep, viewer?: Player): PlayerPublic {
+  const hidePrivateInfiltratorAudio = activeStep === "infiltres" && player.role === "Infiltre" && !canSeeInfiltratorChannel(viewer, room);
   return {
     id: player.id,
     name: player.name,
     connected: player.connected,
     alive: player.alive,
     canVote: player.canVote,
-    canSpeak: player.canSpeak,
-    canAct: canActFor(player, room, activeStep),
-    muted: player.muted,
-    speaking: player.speaking,
-    audioActive: player.audioActive,
+    canSpeak: hidePrivateInfiltratorAudio ? false : player.canSpeak,
+    canAct: viewer?.id === player.id ? canActFor(player, room, activeStep) : false,
+    muted: hidePrivateInfiltratorAudio ? true : player.muted,
+    speaking: hidePrivateInfiltratorAudio ? false : player.speaking,
+    audioActive: hidePrivateInfiltratorAudio ? false : player.audioActive,
     isHost: player.isHost,
     isMayor: player.id === room.mayorId,
     revealedRole: player.revealedRole
@@ -1058,6 +1086,46 @@ function nightChannelFor(player: Player, room: Room, activeStep?: NightStep): No
   return "sleep";
 }
 
+function visibleActivePlayerId(room: Room, viewer?: Player) {
+  const speaker = room.players.find((p) => p.speaking);
+  if (!speaker) return undefined;
+  const activeStep = room.phase === "NIGHT" ? room.night.steps[room.night.stepIndex] : undefined;
+  if (activeStep === "infiltres" && speaker.role === "Infiltre" && !canSeeInfiltratorChannel(viewer, room)) return undefined;
+  return speaker.id;
+}
+
+function canSeeInfiltratorChannel(player: Player | undefined, room: Room) {
+  return room.phase === "NIGHT" && room.night.steps[room.night.stepIndex] === "infiltres" && !!player?.alive && player.role === "Infiltre";
+}
+
+function canSeeInfiltratorVotes(player: Player | undefined, room: Room, activeStep?: NightStep) {
+  return room.phase === "NIGHT" && activeStep === "infiltres" && !!player?.alive && player.role === "Infiltre";
+}
+
+function canHearPlayer(listener: Player, speaker: Player, room: Room) {
+  if (room.audioMode !== "integrated" || room.phase === "GAME_OVER") return false;
+  if (!listener.alive && !room.config.deadCanHearAudio) return false;
+  if (!speaker.alive || !speaker.canSpeak || speaker.muted) return false;
+  if (room.phase === "LOBBY") return true;
+  if (room.phase === "NIGHT") return canSeeInfiltratorChannel(listener, room) && speaker.role === "Infiltre";
+  if (room.phase === "DEFENSE") return room.players.some((p) => p.id === speaker.id && p.speaking);
+  return room.phase === "DAY_ANNOUNCEMENT" || room.phase === "DEBATE";
+}
+
+function canUseIntegratedAudio(player: Player, room: Room) {
+  if (room.audioMode !== "integrated" || room.phase === "GAME_OVER") return false;
+  if (room.phase === "LOBBY") return true;
+  if (room.phase === "NIGHT") return canSeeInfiltratorChannel(player, room);
+  return player.alive || room.config.deadCanHearAudio;
+}
+
+function audioPeerIdsFor(player: Player, room: Room) {
+  if (!canUseIntegratedAudio(player, room)) return [];
+  return room.players
+    .filter((candidate) => candidate.id !== player.id && candidate.connected && (canHearPlayer(player, candidate, room) || canHearPlayer(candidate, player, room)))
+    .map((candidate) => candidate.id);
+}
+
 function applyIntegratedAudioState(room: Room) {
   if (room.audioMode !== "integrated") return;
   if (room.phase === "NIGHT") {
@@ -1072,13 +1140,59 @@ function applyIntegratedAudioState(room: Room) {
   }
 }
 
+function voteWeightFor(voter: Player, room: Room, weighted: boolean) {
+  if (!weighted) return 1;
+  return (voter.role === "Sage" ? 2 : 1) + (voter.id === room.mayorId ? 1 : 0);
+}
+
+function voteDetailsFor(votes: VoteRecord[], room: Room, weighted: boolean): VoteViewRecord[] {
+  return votes.flatMap((vote) => {
+    const voter = room.players.find((p) => p.id === vote.voterId);
+    const target = room.players.find((p) => p.id === vote.targetId);
+    if (!voter?.alive || !voter.canVote || !target?.alive) return [];
+    return [{
+      voterId: voter.id,
+      voterName: voter.name,
+      targetId: target.id,
+      targetName: target.name,
+      weight: voteWeightFor(voter, room, weighted),
+      mayorBonus: weighted && voter.id === room.mayorId,
+      sageBonus: weighted && voter.role === "Sage"
+    }];
+  });
+}
+
+function voteTotalsFor(votes: VoteRecord[], room: Room, weighted: boolean): VoteTotal[] {
+  const names = new Map(room.players.map((p) => [p.id, p.name]));
+  const totals = new Map<string, number>();
+  for (const vote of voteDetailsFor(votes, room, weighted)) {
+    totals.set(vote.targetId, (totals.get(vote.targetId) ?? 0) + vote.weight);
+  }
+  return [...totals.entries()]
+    .map(([targetId, total]) => ({ targetId, targetName: names.get(targetId) ?? "Joueur inconnu", total }))
+    .sort((a, b) => b.total - a.total || a.targetName.localeCompare(b.targetName));
+}
+
+function infiltratorVoteDetails(room: Room): NonNullable<RoomView["infiltratorVotes"]> {
+  return [...room.night.infiltratorVotes.entries()].flatMap(([voterId, targetId]) => {
+    const voter = room.players.find((p) => p.id === voterId);
+    const target = room.players.find((p) => p.id === targetId);
+    if (!voter || !target) return [];
+    return [{ voterId, voterName: voter.name, targetId, targetName: target.name }];
+  });
+}
+
+function infiltratorVoteLeader(room: Room): VoteTotal | undefined {
+  return voteTotalsFor(infiltratorVoteDetails(room), room, false)[0];
+}
+
 function tally(votes: VoteRecord[], room: Room, weighted = false) {
   const scores = new Map<string, number>();
   for (const vote of votes) {
     const voter = room.players.find((p) => p.id === vote.voterId);
     const target = room.players.find((p) => p.id === vote.targetId);
     if (!voter?.alive || !voter.canVote || !target?.alive) continue;
-    const weight = weighted ? (voter.role === "Sage" ? 2 : 1) + (voter.id === room.mayorId ? 1 : 0) : 1;
+    const weight = voteWeightFor(voter, room, weighted);
     scores.set(vote.targetId, (scores.get(vote.targetId) ?? 0) + weight);
   }
   return scores;

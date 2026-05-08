@@ -123,6 +123,7 @@ io.on("connection", (socket) => {
     const fromView = store.viewBySocket(code, socket.id);
     if (!fromView?.you) return;
     if (fromView.audioMode !== "integrated") return socket.emit("toast", "L'audio integre n'est pas actif dans cette partie.");
+    if (!store.canRelayRtcSignal(code, socket.id, to)) return;
     const targetSocketId = store.socketIdForPlayer(code, to);
     if (targetSocketId) io.to(targetSocketId).emit("rtcSignal", { from: fromView.you.id, signal });
   });

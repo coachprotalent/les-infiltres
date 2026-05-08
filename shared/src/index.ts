@@ -79,6 +79,27 @@ export type VoteRecord = {
   targetId: string;
 };
 
+export type VoteViewRecord = VoteRecord & {
+  voterName: string;
+  targetName: string;
+  weight: number;
+  mayorBonus: boolean;
+  sageBonus: boolean;
+};
+
+export type VoteTotal = {
+  targetId: string;
+  targetName: string;
+  total: number;
+};
+
+export type InfiltratorVoteView = {
+  voterId: string;
+  voterName: string;
+  targetId: string;
+  targetName: string;
+};
+
 export type LobbyInfo = {
   minPlayers: number;
   maxPlayers: number;
@@ -121,6 +142,7 @@ export type RoomView = {
     powerStatuses: PowerStatus[];
     nightChannel?: "infiltres" | "solo" | "sleep";
     canHearAudio: boolean;
+    audioPeerIds: string[];
   };
   narrator: string;
   transition?: "night-falls" | "day-rises";
@@ -131,7 +153,11 @@ export type RoomView = {
   timerDuration?: number;
   timerEndsAt?: number;
   votes: VoteRecord[];
+  voteDetails: VoteViewRecord[];
+  voteTotals: VoteTotal[];
   mayorVotes: VoteRecord[];
+  infiltratorVotes?: InfiltratorVoteView[];
+  infiltratorVoteLeader?: VoteTotal;
   lastResult?: string;
   winner?: Winner;
   roleOptions?: Role[];
