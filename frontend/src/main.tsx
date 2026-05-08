@@ -34,11 +34,17 @@ function App() {
   const [config, setConfig] = useState<GameConfig>(DEFAULT_CONFIG);
 
   useEffect(() => {
+    const leaveRoom = (message?: string) => {
+      localStorage.removeItem(roomKey);
+      setView(null);
+      if (message) setToast(message);
+    };
     socket.on("roomState", (next) => {
       persist(next);
       setView(next);
     });
     socket.on("toast", setToast);
+    socket.on("roomClosed", leaveRoom);
     const sessionId = localStorage.getItem(sessionKey);
     const roomCode = localStorage.getItem(roomKey);
     if (sessionId && roomCode) {
@@ -52,6 +58,7 @@ function App() {
     return () => {
       socket.off("roomState");
       socket.off("toast");
+      socket.off("roomClosed", leaveRoom);
     };
   }, []);
 
@@ -96,6 +103,7 @@ function App() {
             <button onClick={join}>Rejoindre</button>
           </div>
           {toast && <p className="toast">{toast}</p>}
+          <p className="muted">Le choix audio ne bloque jamais la creation du salon. Le micro se teste apres creation, dans le lobby.</p>
         </section>
       </main>
     );
@@ -339,7 +347,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
   };
 
   useEffect(() => {
-    if ((view.audioMode !== "integrated" || view.phase === "GAME_OVER") && enabled) stopAudio();
+    if ((view.audioMode !== "integrated" || view.phase === "GAME_OVER" || !view.you?.canHearAudio) && enabled) stopAudio();
   }, [view.audioMode, view.phase, enabled]);
 
   useEffect(() => {
@@ -406,6 +414,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
 
 function Lobby({ view }: { view: RoomView }) {
   const [draft, setDraft] = useState(view.config);
+  const [editing, setEditing] = useState(false);
   const canStart = view.lobby.playerCount >= view.lobby.minPlayers;
 
   useEffect(() => setDraft(view.config), [view.config]);
@@ -413,6 +422,9 @@ function Lobby({ view }: { view: RoomView }) {
   const saveConfig = (next: GameConfig) => {
     setDraft(next);
     socket.emit("updateConfig", { code: view.code, config: next });
+  };
+  const closeRoom = () => {
+    if (window.confirm("Fermer le salon pour tous les joueurs ?")) socket.emit("closeRoom", { code: view.code });
   };
 
   return (
@@ -428,7 +440,18 @@ function Lobby({ view }: { view: RoomView }) {
         <h3>Roles potentiels</h3>
         <div className="chips">{view.lobby.potentialRoles.map((role) => <span key={role}>{ROLE_LABELS[role]}</span>)}</div>
       </div>
-      {view.you?.isHost && <ConfigEditor config={draft} onChange={saveConfig} />}
+      {view.you?.isHost && (
+        <div className="actions-row">
+          <button onClick={() => setEditing((value) => !value)}>{editing ? "Retour au lobby" : "Modifier la configuration"}</button>
+          <button className="danger" onClick={closeRoom}>Fermer le salon</button>
+        </div>
+      )}
+      {view.you?.isHost && editing && (
+        <>
+          <AudioModeEditor code={view.code} audioMode={view.audioMode} />
+          <ConfigEditor config={draft} onChange={saveConfig} />
+        </>
+      )}
       {view.you?.isHost ? (
         <button className="primary" disabled={!canStart} onClick={() => socket.emit("startGame", { code: view.code })}>
           <Play size={18} /> Lancer la partie
@@ -488,6 +511,18 @@ function ConfigEditor({ config, onChange, compact = false }: { config: GameConfi
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function AudioModeEditor({ code, audioMode }: { code: string; audioMode: "integrated" | "external" }) {
+  return (
+    <div className="config">
+      <h3><Mic size={16} /> Mode audio</h3>
+      <div className="mode">
+        <button className={audioMode === "external" ? "selected" : ""} onClick={() => socket.emit("updateAudioMode", { code, audioMode: "external" })}>Audio externe</button>
+        <button className={audioMode === "integrated" ? "selected" : ""} onClick={() => socket.emit("updateAudioMode", { code, audioMode: "integrated" })}>Audio integre</button>
+      </div>
     </div>
   );
 }

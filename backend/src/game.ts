@@ -82,6 +82,7 @@ export class GameStore {
   private rooms = new Map<string, Room>();
   private onChange: (room: Room) => void = () => undefined;
   private onToast: (socketId: string, message: string) => void = () => undefined;
+  private onClose: (socketId: string, message: string) => void = () => undefined;
 
   setBroadcaster(onChange: (room: Room) => void) {
     this.onChange = onChange;
@@ -89,6 +90,10 @@ export class GameStore {
 
   setNotifier(onToast: (socketId: string, message: string) => void) {
     this.onToast = onToast;
+  }
+
+  setCloseNotifier(onClose: (socketId: string, message: string) => void) {
+    this.onClose = onClose;
   }
 
   createRoom(name: string, audioMode: AudioMode, socketId: string, sessionId = randomId(), config?: Partial<GameConfig>): RoomView {
@@ -163,10 +168,37 @@ export class GameStore {
     const room = this.requireHost(code, actorSocketId);
     if (!room) return;
     if (room.phase !== "LOBBY") return this.reject(actorSocketId, "La configuration ne peut etre modifiee que dans le lobby.");
-    room.config = mergeConfig({ ...room.config, ...config, durations: { ...room.config.durations, ...config.durations } });
+    const nextConfig = mergeConfig({ ...room.config, ...config, durations: { ...room.config.durations, ...config.durations } });
+    if (nextConfig.maxPlayers < room.players.length) return this.reject(actorSocketId, "Le nombre maximum ne peut pas etre inferieur au nombre de joueurs deja connectes.");
+    room.config = nextConfig;
     room.narrator = "Configuration avancee mise a jour.";
     this.log(room, "system", "Configuration mise a jour par l'hote.");
     this.emit(room);
+  }
+
+  updateAudioMode(code: string, actorSocketId: string, audioMode: AudioMode) {
+    const room = this.requireHost(code, actorSocketId);
+    if (!room) return;
+    if (room.phase !== "LOBBY") return this.reject(actorSocketId, "Le mode audio ne peut etre modifie que dans le lobby.");
+    room.audioMode = audioMode;
+    room.players.forEach((player) => {
+      player.muted = false;
+      player.audioActive = false;
+      player.canSpeak = true;
+    });
+    room.narrator = audioMode === "integrated" ? "Audio integre selectionne. Les joueurs peuvent tester leur micro." : "Audio externe selectionne.";
+    this.log(room, "system", `Mode audio modifie : ${audioMode}.`);
+    this.emit(room);
+  }
+
+  closeRoom(code: string, actorSocketId: string) {
+    const room = this.requireHost(code, actorSocketId);
+    if (!room) return;
+    if (room.phase !== "LOBBY") return this.reject(actorSocketId, "Le salon ne peut etre ferme qu'avant le lancement de la partie.");
+    this.clearTimer(room);
+    const sockets = room.players.flatMap((player) => (player.socketId ? [player.socketId] : []));
+    this.rooms.delete(room.code);
+    for (const socketId of sockets) this.onClose(socketId, "Le salon a ete ferme par l'hote.");
   }
 
   startGame(code: string, actorSocketId: string) {
@@ -226,6 +258,7 @@ export class GameStore {
     const room = this.requireHost(code, actorSocketId);
     if (!room) return;
     if (room.phase === "GAME_OVER") return this.reject(actorSocketId, "La partie est deja terminee.");
+    if (room.phase === "LOBBY") return this.reject(actorSocketId, "Fermez le salon avant lancement au lieu de mettre fin a la partie.");
     this.finish(room, undefined, "Partie terminee par l'hote.");
     this.emit(room);
   }

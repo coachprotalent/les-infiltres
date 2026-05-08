@@ -143,6 +143,8 @@ export type ClientToServerEvents = {
   joinRoom: (payload: { code: string; name: string; sessionId?: string }, ack: (result: { ok: true; view: RoomView } | { ok: false; error: string }) => void) => void;
   reconnectRoom: (payload: { code: string; sessionId: string }, ack: (result: { ok: true; view: RoomView } | { ok: false; error: string }) => void) => void;
   updateConfig: (payload: { code: string; config: Partial<GameConfig> }) => void;
+  updateAudioMode: (payload: { code: string; audioMode: AudioMode }) => void;
+  closeRoom: (payload: { code: string }) => void;
   startGame: (payload: { code: string }) => void;
   electMayor: (payload: { code: string; targetId: string }) => void;
   adminNext: (payload: { code: string }) => void;
@@ -162,6 +164,7 @@ export type ClientToServerEvents = {
 export type ServerToClientEvents = {
   roomState: (view: RoomView) => void;
   toast: (message: string) => void;
+  roomClosed: (message: string) => void;
   rtcSignal: (payload: { from: string; signal: unknown }) => void;
 };
 
