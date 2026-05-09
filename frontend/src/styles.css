@@ -630,6 +630,22 @@ p {
   gap: 6px;
 }
 
+.mayor-defense-requests {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.mayor-defense-requests span,
+.defense-request-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .adminbar {
   margin-top: 10px;
   padding: 10px 12px;

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { AdminRoomDetails, AdminRoomSummary, AudioMode, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
+import type { AdminRoomDetails, AdminRoomSummary, AudioMode, DefenseRequest, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
 import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, mergeConfig } from "@les-infiltres/shared";
 import { NarrationService } from "./narration.js";
 
@@ -69,6 +69,7 @@ type Room = {
   revoteTargets?: string[];
   nominations: VoteRecord[];
   nominees: string[];
+  defenseRequests: DefenseRequest[];
 };
 
 const NIGHT_STEPS_FIRST: NightStep[] = ["agent-double", "hackeuse", "avocate", "lanceuse-alerte", "infiltres", "ministre"];
@@ -121,6 +122,7 @@ export class GameStore {
       mayorVotes: [],
       nominations: [],
       nominees: [],
+      defenseRequests: [],
       narrator: "Salle creee. En attente des joueurs.",
       powers: emptyPowers(),
       pastorAttemptedIds: new Set(),
@@ -329,8 +331,10 @@ export class GameStore {
     if (room.phase === "MAYOR_ELECTION") return this.resolveMayorElection(room);
     if (room.phase === "NIGHT") return this.advanceNight(room);
     if (room.phase === "DAY_ANNOUNCEMENT") return this.startTimedPhase(room, "DEBATE", room.config.durations.freeDebate, "Debat libre en cours. Les regards cherchent la faille.");
-    if (room.phase === "DEBATE" || room.phase === "DEFENSE") return this.startNomination(room);
-    if (room.phase === "NOMINATION") return this.startVoteFromNominations(room);
+    if (room.phase === "DEBATE") return this.startNomination(room);
+    if (room.phase === "NOMINATION") return this.startDefenseRequests(room);
+    if (room.phase === "DEFENSE_REQUESTS") return this.startVoteFromDefenseRequests(room);
+    if (room.phase === "DEFENSE") return this.completeDefense(room);
     if (room.phase === "VOTING") return this.resolveVote(room);
     if (room.phase === "RESULT") return this.startNight(room);
     return this.reject(actorSocketId, "Aucune phase a debloquer maintenant.");
@@ -359,6 +363,7 @@ export class GameStore {
     room.mayorVotes = [];
     room.nominations = [];
     room.nominees = [];
+    room.defenseRequests = [];
     room.transition = undefined;
     room.timerStartedAt = undefined;
     room.timerDuration = undefined;
@@ -479,9 +484,28 @@ export class GameStore {
   grantSpeech(code: string, actorSocketId: string, playerId: string, seconds?: number) {
     const room = this.requireMayor(code, actorSocketId);
     if (!room) return;
-    if (!["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(room.phase)) return this.reject(actorSocketId, "La parole ne peut pas etre donnee pendant cette phase.");
     const target = room.players.find((p) => p.id === playerId && p.alive);
     if (!target) return this.reject(actorSocketId, "Ce joueur ne peut pas parler.");
+
+    if (room.phase === "DAY_ANNOUNCEMENT" || room.phase === "DEBATE") {
+      room.phase = "DEBATE";
+      room.players.forEach((p) => {
+        p.speaking = p.id === target.id;
+        p.canSpeak = p.alive && p.id === target.id;
+        p.audioActive = false;
+        p.muted = room.audioMode === "integrated" ? p.id !== target.id : p.muted;
+      });
+      if (seconds) this.startTimer(room, seconds, () => this.stopSpeech(room));
+      room.narrator = `${target.name} a la parole pendant le debat.`;
+      this.log(room, "phase", `Parole de debat accordee a ${target.name}.`);
+      return this.emit(room);
+    }
+
+    if (room.phase !== "DEFENSE_REQUESTS") return this.reject(actorSocketId, "La defense ne peut pas etre accordee pendant cette phase.");
+    if (!room.nominees.includes(target.id)) return this.reject(actorSocketId, "Seuls les joueurs nomines peuvent se defendre.");
+    const request = room.defenseRequests.find((item) => item.playerId === target.id);
+    if (!request || request.status !== "pending") return this.reject(actorSocketId, "Ce nomine n'a pas de demande de defense en attente.");
+    request.status = "granted";
     room.phase = "DEFENSE";
     room.players.forEach((p) => {
       p.speaking = p.id === target.id;
@@ -498,7 +522,8 @@ export class GameStore {
   stopSpeech(codeOrRoom: string | Room, actorSocketId?: string) {
     const room = typeof codeOrRoom === "string" ? this.requireMayor(codeOrRoom, actorSocketId ?? "") : codeOrRoom;
     if (!room) return;
-    this.clearTimer(room);
+    if (room.phase === "DEFENSE") return this.completeDefense(room);
+    if (room.phase !== "DEBATE") this.clearTimer(room);
     room.players.forEach((p) => {
       p.speaking = false;
       p.canSpeak = p.alive;
@@ -513,7 +538,7 @@ export class GameStore {
   closeDebate(code: string, actorSocketId: string) {
     const room = this.requireMayor(code, actorSocketId);
     if (!room) return;
-    if (!["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(room.phase)) return this.reject(actorSocketId, "Le debat ne peut pas etre cloture pendant cette phase.");
+    if (!["DAY_ANNOUNCEMENT", "DEBATE"].includes(room.phase)) return this.reject(actorSocketId, "Le debat ne peut pas etre cloture pendant cette phase.");
     this.startNomination(room);
   }
 
@@ -532,12 +557,41 @@ export class GameStore {
     this.emit(room);
   }
 
+  requestDefense(code: string, actorSocketId: string) {
+    const room = this.getRoom(code);
+    const actor = room?.players.find((p) => p.socketId === actorSocketId);
+    if (!room || !actor) return this.reject(actorSocketId, "Partie introuvable.");
+    if (room.phase !== "DEFENSE_REQUESTS") return this.reject(actorSocketId, "Vous ne pouvez pas demander une defense pendant cette phase.");
+    if (!actor.alive) return this.reject(actorSocketId, "Vous etes elimine.");
+    if (!room.nominees.includes(actor.id)) return this.reject(actorSocketId, "Seuls les joueurs nomines peuvent demander une defense.");
+    const existing = room.defenseRequests.find((request) => request.playerId === actor.id);
+    if (existing) return this.reject(actorSocketId, "Votre demande de defense est deja enregistree ou traitee.");
+    room.defenseRequests.push({ playerId: actor.id, playerName: actor.name, status: "pending", requestedAt: Date.now() });
+    room.narrator = `${actor.name} demande a se defendre. Le Maire decide de lui accorder la parole ou de passer.`;
+    this.log(room, "phase", `${actor.name} demande une defense.`);
+    this.emit(room);
+  }
+
+  denyDefense(code: string, actorSocketId: string, playerId: string) {
+    const room = this.requireMayor(code, actorSocketId);
+    if (!room) return;
+    if (room.phase !== "DEFENSE_REQUESTS") return this.reject(actorSocketId, "Aucune demande de defense ne peut etre traitee maintenant.");
+    const request = room.defenseRequests.find((item) => item.playerId === playerId);
+    if (!request || request.status !== "pending") return this.reject(actorSocketId, "Aucune demande en attente pour ce nomine.");
+    request.status = "refused";
+    room.narrator = `Le Maire passe la defense de ${request.playerName}.`;
+    this.log(room, "phase", `Defense refusee ou passee pour ${request.playerName}.`);
+    if (shouldAutoVoteAfterDefenseRequests(room)) return this.startVoteFromDefenseRequests(room);
+    this.emit(room);
+  }
+
   startVote(code: string, actorSocketId: string, seconds?: number) {
     const room = this.requireMayor(code, actorSocketId);
     if (!room) return;
-    if (room.phase === "NOMINATION") return this.startVoteFromNominations(room, seconds);
-    if (!["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(room.phase)) return this.reject(actorSocketId, "Le vote ne peut pas etre lance pendant cette phase.");
-    this.startNomination(room);
+    if (room.phase === "NOMINATION") return this.startDefenseRequests(room);
+    if (room.phase === "DEFENSE_REQUESTS") return this.startVoteFromDefenseRequests(room, seconds);
+    if (room.phase === "DAY_ANNOUNCEMENT" || room.phase === "DEBATE") return this.startNomination(room);
+    return this.reject(actorSocketId, "Le vote ne peut pas etre lance pendant cette phase.");
   }
 
   vote(code: string, actorSocketId: string, targetId: string) {
@@ -628,6 +682,7 @@ export class GameStore {
     room.transition = undefined;
     room.nominations = [];
     room.nominees = [];
+    room.defenseRequests = [];
     room.votes = [];
     room.revoteTargets = undefined;
     room.players.forEach((p) => {
@@ -638,11 +693,11 @@ export class GameStore {
     });
     room.narrator = NarrationService.fallback({ type: "nomination", phase: room.phase, round: room.round }, "Les nominations sont ouvertes. Chaque joueur vivant peut designer un suspect, et peut changer d'avis avant la fin.");
     this.log(room, "phase", "Nominations ouvertes.");
-    this.startTimer(room, room.config.durations.nomination, () => this.startVoteFromNominations(room));
+    this.startTimer(room, room.config.durations.nomination, () => this.startDefenseRequests(room));
     this.emit(room);
   }
 
-  private startVoteFromNominations(room: Room, seconds?: number) {
+  private startDefenseRequests(room: Room) {
     this.clearTimer(room);
     room.nominees = Array.from(new Set(room.nominations.map((vote) => vote.targetId))).filter((id) => room.players.some((p) => p.id === id && p.alive));
     if (!room.nominees.length) {
@@ -655,7 +710,47 @@ export class GameStore {
       this.startTimer(room, room.config.durations.resultReveal, () => this.startNight(room));
       return this.emit(room);
     }
+    room.phase = "DEFENSE_REQUESTS";
+    room.defenseRequests = [];
+    room.players.forEach((p) => {
+      p.speaking = false;
+      p.canSpeak = false;
+      p.audioActive = false;
+      if (room.audioMode === "integrated") p.muted = true;
+    });
+    const nomineeNames = room.nominees.map((id) => room.players.find((p) => p.id === id)?.name).filter(Boolean).join(", ");
+    room.narrator = `Nominations verrouillees : ${nomineeNames}. Les nomines peuvent demander une defense au Maire.`;
+    this.log(room, "phase", `Demandes de defense ouvertes pour : ${nomineeNames}.`);
+    this.emit(room);
+  }
+
+  private startVoteFromDefenseRequests(room: Room, seconds?: number) {
+    this.clearTimer(room);
+    if (!room.nominees.length) {
+      room.nominees = Array.from(new Set(room.nominations.map((vote) => vote.targetId))).filter((id) => room.players.some((p) => p.id === id && p.alive));
+    }
+    room.defenseRequests = room.defenseRequests.map((request) => request.status === "pending" ? { ...request, status: "refused" } : request);
     this.startTimedPhase(room, "VOTING", seconds ?? room.config.durations.vote, NarrationService.fallback({ type: "vote", phase: "VOTING", round: room.round }, "Vote ouvert parmi les joueurs nomines. Les choix sont publics, les voix se comptent devant tous."));
+  }
+
+  private completeDefense(room: Room) {
+    this.clearTimer(room);
+    const speaker = room.players.find((p) => p.speaking);
+    if (speaker) {
+      const request = room.defenseRequests.find((item) => item.playerId === speaker.id && item.status === "granted");
+      if (request) request.status = "done";
+      this.log(room, "phase", `Defense terminee pour ${speaker.name}.`);
+    }
+    room.players.forEach((p) => {
+      p.speaking = false;
+      p.canSpeak = false;
+      p.audioActive = false;
+      if (room.audioMode === "integrated") p.muted = true;
+    });
+    if (shouldAutoVoteAfterDefenseRequests(room)) return this.startVoteFromDefenseRequests(room);
+    room.phase = "DEFENSE_REQUESTS";
+    room.narrator = "Defense terminee. Le Maire peut traiter les autres demandes ou passer au vote.";
+    this.emit(room);
   }
 
   private startNight(room: Room) {
@@ -667,6 +762,7 @@ export class GameStore {
     room.votes = [];
     room.nominations = [];
     room.nominees = [];
+    room.defenseRequests = [];
     room.revoteTargets = undefined;
     room.players.forEach((p) => {
       p.canVote = p.alive;
@@ -844,6 +940,9 @@ export class GameStore {
     room.transition = undefined;
     room.votes = [];
     room.mayorVotes = [];
+    room.nominations = [];
+    room.nominees = [];
+    room.defenseRequests = [];
     room.revoteTargets = undefined;
     room.players.forEach((p) => {
       p.canVote = false;
@@ -1070,10 +1169,11 @@ export class GameStore {
       mayorVotes: room.phase === "MAYOR_ELECTION" ? room.mayorVotes : [],
       mayorVoteDetails: room.phase === "MAYOR_ELECTION" ? voteDetailsFor(room.mayorVotes, room, false) : [],
       mayorVoteTotals: room.phase === "MAYOR_ELECTION" ? voteTotalsFor(room.mayorVotes, room, false) : [],
-      nominations: room.phase === "NOMINATION" || room.phase === "VOTING" ? room.nominations : [],
-      nominationDetails: room.phase === "NOMINATION" || room.phase === "VOTING" ? voteDetailsFor(room.nominations, room, false) : [],
-      nominationTotals: room.phase === "NOMINATION" || room.phase === "VOTING" ? voteTotalsFor(room.nominations, room, false) : [],
-      nominees: room.phase === "NOMINATION" || room.phase === "VOTING" ? room.nominees : [],
+      nominations: showsNominations(room.phase) ? room.nominations : [],
+      nominationDetails: showsNominations(room.phase) ? voteDetailsFor(room.nominations, room, false) : [],
+      nominationTotals: showsNominations(room.phase) ? voteTotalsFor(room.nominations, room, false) : [],
+      nominees: showsNominations(room.phase) ? room.nominees : [],
+      defenseRequests: showsNominations(room.phase) ? room.defenseRequests : [],
       infiltratorVotes: canSeeInfiltratorVotes(player, room, activeStep) ? infiltratorVoteDetails(room) : undefined,
       infiltratorVoteLeader: canSeeInfiltratorVotes(player, room, activeStep) ? infiltratorVoteLeader(room) : undefined,
       lastResult: room.lastResult,
@@ -1143,6 +1243,17 @@ function canActFor(player: Player, room: Room, activeStep?: NightStep) {
   if (!player.alive || room.phase !== "NIGHT" || !activeStep) return false;
   if (activeStep === "infiltres" && (player.role === "Infiltre" || player.role === "LeaderLouange" || player.role === "Guetteuse")) return true;
   return stepRole[activeStep] === player.role;
+}
+
+function showsNominations(phase: GamePhase) {
+  return phase === "NOMINATION" || phase === "DEFENSE_REQUESTS" || phase === "DEFENSE" || phase === "VOTING";
+}
+
+function shouldAutoVoteAfterDefenseRequests(room: Room) {
+  return room.nominees.length > 0 && room.nominees.every((playerId) => {
+    const request = room.defenseRequests.find((item) => item.playerId === playerId);
+    return !!request && request.status !== "pending" && request.status !== "granted";
+  });
 }
 
 function lobbyInfo(playerCount: number, config: GameConfig) {

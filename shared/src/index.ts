@@ -24,8 +24,9 @@ export type GamePhase =
   | "NIGHT"
   | "DAY_ANNOUNCEMENT"
   | "DEBATE"
-  | "DEFENSE"
   | "NOMINATION"
+  | "DEFENSE_REQUESTS"
+  | "DEFENSE"
   | "VOTING"
   | "RESULT"
   | "GAME_OVER";
@@ -97,6 +98,15 @@ export type VoteTotal = {
   total: number;
 };
 
+export type DefenseRequestStatus = "pending" | "granted" | "refused" | "done";
+
+export type DefenseRequest = {
+  playerId: string;
+  playerName: string;
+  status: DefenseRequestStatus;
+  requestedAt: number;
+};
+
 export type InfiltratorVoteView = {
   voterId: string;
   voterName: string;
@@ -166,6 +176,7 @@ export type RoomView = {
   nominationDetails: VoteViewRecord[];
   nominationTotals: VoteTotal[];
   nominees: string[];
+  defenseRequests: DefenseRequest[];
   infiltratorVotes?: InfiltratorVoteView[];
   infiltratorVoteLeader?: VoteTotal;
   lastResult?: string;
@@ -220,6 +231,8 @@ export type ClientToServerEvents = {
   stopSpeech: (payload: { code: string }) => void;
   closeDebate: (payload: { code: string }) => void;
   nominate: (payload: { code: string; targetId: string }) => void;
+  requestDefense: (payload: { code: string }) => void;
+  denyDefense: (payload: { code: string; playerId: string }) => void;
   startVote: (payload: { code: string; seconds?: number }) => void;
   vote: (payload: { code: string; targetId: string }) => void;
   setMuted: (payload: { code: string; playerId: string; muted: boolean }) => void;

@@ -372,6 +372,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
           {view.phase === "NIGHT" && <NightPanel view={view} />}
           {["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(view.phase) && <DebatePanel view={view} timer={timer} />}
           {view.phase === "NOMINATION" && <NominationPanel view={view} />}
+          {view.phase === "DEFENSE_REQUESTS" && <DefenseRequestsPanel view={view} />}
           {view.phase === "VOTING" && <VotePanel view={view} />}
           {view.phase === "RESULT" && <ResultPanel view={view} />}
           {view.phase === "GAME_OVER" && <EndPanel view={view} onLeaveRoom={onLeaveRoom} />}
@@ -977,6 +978,31 @@ function NominationPanel({ view }: { view: RoomView }) {
   );
 }
 
+function DefenseRequestsPanel({ view }: { view: RoomView }) {
+  const requested = view.defenseRequests.find((request) => request.playerId === view.you?.id);
+  const isNominee = !!view.you?.alive && view.nominees.includes(view.you.id);
+  const nomineePlayers = view.players.filter((player) => view.nominees.includes(player.id));
+  return (
+    <div className="content">
+      <h2>Demandes de defense</h2>
+      <p>Liste finale des nomines : <strong>{nomineePlayers.map((player) => player.name).join(", ")}</strong>.</p>
+      <PublicVoteBoard title="Nominations verrouillees" emptyText="Aucun nomine." details={view.nominationDetails} totals={view.nominationTotals} verb="a nomine" />
+      {isNominee ? (
+        <div className="defense-request-card">
+          <p>Vous etes nomine. Vous pouvez demander au Maire de vous accorder un temps de defense.</p>
+          <button className="primary" disabled={!!requested} onClick={() => socket.emit("requestDefense", { code: view.code })}>
+            <Gavel size={18} /> Demander a se defendre
+          </button>
+          {requested && <p className="muted">Demande {defenseRequestStatusLabel(requested.status)}.</p>}
+        </div>
+      ) : (
+        <p className="muted">{view.you?.alive ? "Seuls les joueurs nomines peuvent demander une defense." : "Vous etes emprisonne : vous observez les defenses sans participer."}</p>
+      )}
+      <DefenseRequestBoard requests={view.defenseRequests} />
+    </div>
+  );
+}
+
 function VotePanel({ view }: { view: RoomView }) {
   const ownVote = view.voteDetails.find((vote) => vote.voterId === view.you?.id);
   const [targetId, setTargetId] = useState(ownVote?.targetId ?? "");
@@ -1001,6 +1027,33 @@ function VotePanel({ view }: { view: RoomView }) {
       <PublicVoteBoard title="Votes publics" emptyText="Aucun vote enregistre." details={view.voteDetails} totals={view.voteTotals} verb="vote contre" weighted />
     </div>
   );
+}
+
+function DefenseRequestBoard({ requests }: { requests: RoomView["defenseRequests"] }) {
+  return (
+    <div className="vote-ledger">
+      <h3>Demandes recues</h3>
+      {requests.length ? (
+        requests.map((request) => (
+          <p key={request.playerId}>
+            <strong>{request.playerName}</strong> : {defenseRequestStatusLabel(request.status)}
+          </p>
+        ))
+      ) : (
+        <p className="muted">Aucune demande de defense pour l'instant.</p>
+      )}
+    </div>
+  );
+}
+
+function defenseRequestStatusLabel(status: RoomView["defenseRequests"][number]["status"]) {
+  const labels: Record<RoomView["defenseRequests"][number]["status"], string> = {
+    pending: "en attente",
+    granted: "accordee",
+    refused: "passee",
+    done: "terminee"
+  };
+  return labels[status];
 }
 
 function PublicVoteBoard({ title, emptyText, details, totals, verb, weighted = false }: { title: string; emptyText: string; details: RoomView["voteDetails"]; totals: RoomView["voteTotals"]; verb: string; weighted?: boolean }) {
@@ -1057,6 +1110,7 @@ function EndPanel({ view, onLeaveRoom }: { view: RoomView; onLeaveRoom: () => vo
 function MayorPanel({ view, alivePlayers, timer }: { view: RoomView; alivePlayers: RoomView["players"]; timer?: TimerInfo }) {
   const [speechPlayer, setSpeechPlayer] = useState(alivePlayers[0]?.id ?? "");
   const speaker = view.players.find((player) => player.id === view.activePlayerId);
+  const pendingDefenseRequests = view.defenseRequests.filter((request) => request.status === "pending");
   const closeDebate = () => {
     if (window.confirm("Cloturer le debat et passer aux nominations ?")) socket.emit("closeDebate", { code: view.code });
   };
@@ -1064,16 +1118,36 @@ function MayorPanel({ view, alivePlayers, timer }: { view: RoomView; alivePlayer
     <section className="hostbar mayorbar">
       <strong><Crown size={17} /> Panneau Maire</strong>
       {timer && <span className={timer.urgent ? "timer-inline urgent" : "timer-inline"}>{timer.label} : {formatSeconds(timer.secondsLeft)}</span>}
-      <select value={speechPlayer} onChange={(event) => setSpeechPlayer(event.target.value)}>{alivePlayers.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select>
-      <button onClick={() => socket.emit("startDebate", { code: view.code })}>Debat global</button>
-      <button disabled={!speechPlayer} onClick={() => socket.emit("grantSpeech", { code: view.code, playerId: speechPlayer })}>Defense</button>
-      <button onClick={() => socket.emit("stopSpeech", { code: view.code })}>Couper</button>
-      {["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(view.phase) ? (
+      {(view.phase === "DAY_ANNOUNCEMENT" || view.phase === "DEBATE") && (
+        <>
+          <select value={speechPlayer} onChange={(event) => setSpeechPlayer(event.target.value)}>{alivePlayers.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select>
+          <button onClick={() => socket.emit("startDebate", { code: view.code })}>Debat global</button>
+          <button disabled={!speechPlayer} onClick={() => socket.emit("grantSpeech", { code: view.code, playerId: speechPlayer })}>Donner parole</button>
+          <button onClick={() => socket.emit("stopSpeech", { code: view.code })}>Couper</button>
+        </>
+      )}
+      {view.phase === "DEFENSE" && <button onClick={() => socket.emit("stopSpeech", { code: view.code })}>Arreter la defense</button>}
+      {["DAY_ANNOUNCEMENT", "DEBATE"].includes(view.phase) ? (
         <button onClick={closeDebate}>Passer aux nominations</button>
+      ) : view.phase === "DEFENSE_REQUESTS" ? (
+        <button onClick={() => socket.emit("startVote", { code: view.code })}>Passer au vote</button>
+      ) : view.phase === "DEFENSE" ? (
+        <button disabled>Defense en cours</button>
       ) : (
-        <button disabled={view.phase !== "NOMINATION"} onClick={() => socket.emit("startVote", { code: view.code })}>Passer au vote</button>
+        <button disabled={view.phase !== "NOMINATION"} onClick={() => socket.emit("startVote", { code: view.code })}>Cloturer les nominations</button>
       )}
       <span>{speaker ? `Parle : ${speaker.name}` : "Parole libre"}</span>
+      {view.phase === "DEFENSE_REQUESTS" && (
+        <div className="mayor-defense-requests">
+          {pendingDefenseRequests.length ? pendingDefenseRequests.map((request) => (
+            <span key={request.playerId}>
+              {request.playerName}
+              <button onClick={() => socket.emit("grantSpeech", { code: view.code, playerId: request.playerId })}>Accorder la defense</button>
+              <button onClick={() => socket.emit("denyDefense", { code: view.code, playerId: request.playerId })}>Passer</button>
+            </span>
+          )) : <span>Aucune demande en attente</span>}
+        </div>
+      )}
     </section>
   );
 }
@@ -1233,8 +1307,9 @@ function phaseLabel(phase: RoomView["phase"]) {
     NIGHT: "Nuit",
     DAY_ANNOUNCEMENT: "Annonce jour",
     DEBATE: "Debat",
-    DEFENSE: "Defense",
     NOMINATION: "Nominations",
+    DEFENSE_REQUESTS: "Demandes defense",
+    DEFENSE: "Defense",
     VOTING: "Vote",
     RESULT: "Resultat",
     GAME_OVER: "Fin"
