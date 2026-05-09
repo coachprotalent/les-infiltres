@@ -366,16 +366,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
 
       <div className="layout">
         <section className="panel main-panel">
-          {view.phase === "LOBBY" && <Lobby view={view} />}
-          {view.phase === "MAYOR_ELECTION" && <MayorElection view={view} />}
-          {view.phase !== "LOBBY" && you && <RoleCard view={view} />}
-          {view.phase === "NIGHT" && <NightPanel view={view} />}
-          {["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(view.phase) && <DebatePanel view={view} timer={timer} />}
-          {view.phase === "NOMINATION" && <NominationPanel view={view} />}
-          {view.phase === "DEFENSE_REQUESTS" && <DefenseRequestsPanel view={view} />}
-          {view.phase === "VOTING" && <VotePanel view={view} />}
-          {view.phase === "RESULT" && <ResultPanel view={view} />}
-          {view.phase === "GAME_OVER" && <EndPanel view={view} onLeaveRoom={onLeaveRoom} />}
+          <PhaseContent view={view} timer={timer} onLeaveRoom={onLeaveRoom} />
         </section>
 
         <aside className="panel side-panel">
@@ -400,6 +391,52 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
       {you?.isMayor && you.alive && <MayorPanel view={view} alivePlayers={alivePlayers} timer={timer} />}
       {you?.isHost && <AdminPanel view={view} />}
     </main>
+  );
+}
+
+function PhaseContent({ view, timer, onLeaveRoom }: { view: RoomView; timer?: TimerInfo; onLeaveRoom: () => void }) {
+  const hasPhasePanel = hasKnownPhasePanel(view.phase);
+  return (
+    <>
+      {view.phase === "LOBBY" && <Lobby view={view} />}
+      {view.phase === "MAYOR_ELECTION" && <MayorElection view={view} />}
+      {view.phase !== "LOBBY" && view.you && <RoleCard view={view} />}
+      {view.phase === "NIGHT" && <NightPanel view={view} />}
+      {["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(view.phase) && <DebatePanel view={view} timer={timer} />}
+      {view.phase === "NOMINATION" && <NominationPanel view={view} />}
+      {view.phase === "DEFENSE_REQUESTS" && <DefenseRequestsPanel view={view} />}
+      {view.phase === "VOTING" && <VotePanel view={view} />}
+      {view.phase === "RESULT" && <ResultPanel view={view} />}
+      {view.phase === "GAME_OVER" && <EndPanel view={view} onLeaveRoom={onLeaveRoom} />}
+      {!hasPhasePanel && <PhaseFallback view={view} timer={timer} />}
+    </>
+  );
+}
+
+function hasKnownPhasePanel(phase: RoomView["phase"] | string) {
+  return [
+    "LOBBY",
+    "MAYOR_ELECTION",
+    "NIGHT",
+    "DAY_ANNOUNCEMENT",
+    "DEBATE",
+    "NOMINATION",
+    "DEFENSE_REQUESTS",
+    "DEFENSE",
+    "VOTING",
+    "RESULT",
+    "GAME_OVER"
+  ].includes(phase);
+}
+
+function PhaseFallback({ view, timer }: { view: RoomView; timer?: TimerInfo }) {
+  return (
+    <div className="content phase-fallback">
+      <h2>{phaseLabel(view.phase)}</h2>
+      <p>{view.narrator || "La partie continue. En attente de la prochaine action."}</p>
+      {timer && <PhaseTimer timer={timer} compact />}
+      <p className="muted">Phase actuelle : {phaseLabel(view.phase)}.</p>
+    </div>
   );
 }
 
@@ -828,7 +865,10 @@ function RoleCard({ view }: { view: RoomView }) {
   if (!role) return null;
   return (
     <div className="role-card">
-      <span>Votre role secret</span>
+      <div className="role-card-meta">
+        <span>Votre role secret</span>
+        {view.you?.isMayor && <span className="role-badge"><Crown size={14} /> Maire</span>}
+      </div>
       <h2>{ROLE_LABELS[role]}</h2>
       <p>{ROLE_DESCRIPTIONS[role]}</p>
       <ul className="ability-list">
@@ -1299,8 +1339,8 @@ function audioStatusText(audio: ReturnType<typeof useIntegratedAudio>, muted: bo
   return `Micro ouvert. Pairs audio : ${audio.activePeers}.`;
 }
 
-function phaseLabel(phase: RoomView["phase"]) {
-  const labels: Record<RoomView["phase"], string> = {
+function phaseLabel(phase: RoomView["phase"] | string) {
+  const labels: Partial<Record<string, string>> = {
     LOBBY: "Lobby",
     ROLE_DISTRIBUTION: "Distribution",
     MAYOR_ELECTION: "Election Maire",
@@ -1314,7 +1354,7 @@ function phaseLabel(phase: RoomView["phase"]) {
     RESULT: "Resultat",
     GAME_OVER: "Fin"
   };
-  return labels[phase];
+  return labels[phase] ?? `Phase ${phase}`;
 }
 
 function adminStatusLabel(status: AdminRoomSummary["status"]) {

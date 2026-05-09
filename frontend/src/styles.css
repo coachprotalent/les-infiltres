@@ -355,6 +355,27 @@ p {
   background: rgba(20, 55, 31, 0.38);
 }
 
+.role-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.role-card .role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(223, 185, 91, 0.18);
+  color: #f4dfaa;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .role-card span,
 .role-card small,
 .muted,
@@ -427,6 +448,13 @@ p {
 .used-power {
   color: #ffd37a;
   font-weight: 700;
+}
+
+.phase-fallback {
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(242, 240, 231, 0.16);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .sleep-screen {
