@@ -25,6 +25,7 @@ const socket: AppSocket = io("/", { autoConnect: true });
 const sessionKey = "les-infiltres-session";
 const roomKey = "les-infiltres-room";
 const adminTokenKey = "les-infiltres-admin-token";
+const phaseTutorialKey = "les-infiltres-phase-tutorial-seen";
 
 function App() {
   const [view, setView] = useState<RoomView | null>(null);
@@ -366,6 +367,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
 
       <div className="layout">
         <section className="panel main-panel">
+          <PhaseIntro view={view} />
           <PhaseContent view={view} timer={timer} onLeaveRoom={onLeaveRoom} />
         </section>
 
@@ -399,6 +401,7 @@ function PhaseContent({ view, timer, onLeaveRoom }: { view: RoomView; timer?: Ti
   return (
     <>
       {view.phase === "LOBBY" && <Lobby view={view} />}
+      {view.phase === "MAYOR_NOMINATION" && <MayorNomination view={view} />}
       {view.phase === "MAYOR_ELECTION" && <MayorElection view={view} />}
       {view.phase !== "LOBBY" && view.you && <RoleCard view={view} />}
       {view.phase === "NIGHT" && <NightPanel view={view} />}
@@ -416,6 +419,7 @@ function PhaseContent({ view, timer, onLeaveRoom }: { view: RoomView; timer?: Ti
 function hasKnownPhasePanel(phase: RoomView["phase"] | string) {
   return [
     "LOBBY",
+    "MAYOR_NOMINATION",
     "MAYOR_ELECTION",
     "NIGHT",
     "DAY_ANNOUNCEMENT",
@@ -438,6 +442,96 @@ function PhaseFallback({ view, timer }: { view: RoomView; timer?: TimerInfo }) {
       <p className="muted">Phase actuelle : {phaseLabel(view.phase)}.</p>
     </div>
   );
+}
+
+function PhaseIntro({ view }: { view: RoomView }) {
+  const phaseKey = view.phase === "NIGHT" && view.currentNightStep ? `NIGHT:${view.currentNightStep}` : view.phase;
+  const [seen, setSeen] = useState<Set<string>>(() => readPhaseTutorialSeen(view.code));
+  const [expandedKey, setExpandedKey] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    const stored = readPhaseTutorialSeen(view.code);
+    setSeen(stored);
+    setExpandedKey(stored.has(phaseKey) ? undefined : phaseKey);
+  }, [view.code, phaseKey]);
+  const tutorial = phaseTutorialFor(view);
+  useEffect(() => {
+    if (!tutorial || view.phase === "LOBBY" || view.phase === "GAME_OVER" || seen.has(phaseKey)) return;
+    const next = new Set(seen);
+    next.add(phaseKey);
+    setSeen(next);
+    localStorage.setItem(`${phaseTutorialKey}:${view.code}`, JSON.stringify([...next]));
+  }, [phaseKey, seen, tutorial?.title, view.code, view.phase]);
+  if (!tutorial || view.phase === "LOBBY" || view.phase === "GAME_OVER") return null;
+  if (expandedKey !== phaseKey) return <p className="phase-reminder">{tutorial.short}</p>;
+  return (
+    <div className="phase-intro">
+      <div>
+        <span className="eyebrow">Guide de phase</span>
+        <h2>{tutorial.title}</h2>
+        <p>{tutorial.body}</p>
+      </div>
+      <button onClick={() => setExpandedKey(undefined)}>Compris</button>
+    </div>
+  );
+}
+
+function readPhaseTutorialSeen(code: string) {
+  try {
+    const raw = localStorage.getItem(`${phaseTutorialKey}:${code}`);
+    const values = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(values) ? values.filter((value): value is string => typeof value === "string") : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function phaseTutorialFor(view: RoomView) {
+  if (view.phase === "MAYOR_NOMINATION") return {
+    title: "Nomination du Maire",
+    body: "Les joueurs vivants proposent publiquement les candidats au poste de Maire. Vous pouvez modifier votre nomination jusqu'a la fin du chrono.",
+    short: "Nominations Maire : proposez ou modifiez votre candidat."
+  };
+  if (view.phase === "MAYOR_ELECTION") return {
+    title: "Vote du Maire",
+    body: "Votez uniquement parmi les candidats nomines. Le joueur avec le plus de voix devient Maire et gerera la parole.",
+    short: "Vote Maire : choisissez parmi les candidats verrouilles."
+  };
+  if (view.phase === "DEBATE") return {
+    title: "Debat",
+    body: "Pendant cette phase, les joueurs debattent afin d'identifier les suspects. Le Maire peut laisser la parole libre ou verrouiller les micros.",
+    short: "Debat : discutez, sauf si le Maire verrouille la parole."
+  };
+  if (view.phase === "NOMINATION") return {
+    title: "Nomination",
+    body: "Choisissez les joueurs que vous souhaitez voir passer au vote. Les nominations sont publiques et modifiables jusqu'a la fin du chrono.",
+    short: "Nominations : designez les suspects."
+  };
+  if (view.phase === "DEFENSE_REQUESTS" || view.phase === "DEFENSE") return {
+    title: "Defense",
+    body: "Les joueurs nomines peuvent demander au Maire l'autorisation de se defendre avant le vote.",
+    short: "Defense : les nomines demandent la parole au Maire."
+  };
+  if (view.phase === "VOTING") return {
+    title: "Vote",
+    body: "Votez publiquement parmi les joueurs nomines. Les bonus du Sage et du Maire sont comptes au depouillement.",
+    short: "Vote : choisissez parmi les nomines."
+  };
+  if (view.phase === "NIGHT" && view.currentNightStep === "infiltres") return {
+    title: "Phase Infiltres",
+    body: "Les Infiltres choisissent secretement leur cible. Les autres joueurs voient des etats audio neutralises, sauf la Guetteuse qui peut observer au risque de s'exposer.",
+    short: "Infiltres : cible secrete, etats audio masques."
+  };
+  if (view.phase === "NIGHT" && view.activeRole === "Hackeuse") return {
+    title: "Hackeuse",
+    body: "La Hackeuse peut enqueter sur un joueur et decouvrir secretement son role.",
+    short: "Hackeuse : enquetez sur un joueur."
+  };
+  if (view.phase === "NIGHT") return {
+    title: "Nuit",
+    body: "Les roles se reveillent un par un. Le joueur concerne peut agir ou terminer son tour sans attendre la fin du chrono.",
+    short: "Nuit : agissez ou terminez votre tour."
+  };
+  return undefined;
 }
 
 function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) {
@@ -836,20 +930,51 @@ function ConfigField({ label, help, children }: { label: string; help: string; c
   );
 }
 
+function MayorNomination({ view }: { view: RoomView }) {
+  const ownNomination = view.mayorNominationDetails.find((vote) => vote.voterId === view.you?.id);
+  const [targetId, setTargetId] = useState(ownNomination?.targetId ?? "");
+  const canNominate = !!view.you?.alive && !!view.you?.canVote;
+  useEffect(() => setTargetId(ownNomination?.targetId ?? ""), [ownNomination?.targetId]);
+  return (
+    <div className="content">
+      <h2>Nomination du Maire</h2>
+      <p>Proposez publiquement les candidats au poste de Maire. Le dernier choix remplace le precedent jusqu'a la fin du chrono.</p>
+      {canNominate ? (
+        <>
+          <SelectTarget value={targetId} onChange={(value) => {
+            setTargetId(value);
+            if (value) socket.emit("nominateMayor", { code: view.code, targetId: value });
+          }} players={view.players.filter((player) => player.alive)} />
+          <button className="primary" disabled={!targetId} onClick={() => socket.emit("nominateMayor", { code: view.code, targetId })}>
+            <Crown size={18} /> {ownNomination ? "Changer ma nomination" : "Nominer comme Maire"}
+          </button>
+          {ownNomination && <p className="muted">Votre nomination actuelle : <strong>{ownNomination.targetName}</strong>.</p>}
+        </>
+      ) : (
+        <p className="muted">Vous observez les nominations sans participer.</p>
+      )}
+      <PublicVoteBoard title="Nominations Maire publiques" emptyText="Aucune candidature proposee." details={view.mayorNominationDetails} totals={view.mayorNominationTotals} verb="propose" />
+    </div>
+  );
+}
+
 function MayorElection({ view }: { view: RoomView }) {
   const ownVote = view.mayorVoteDetails.find((vote) => vote.voterId === view.you?.id);
   const [targetId, setTargetId] = useState(ownVote?.targetId ?? "");
   const canVote = !!view.you?.alive && !!view.you?.canVote;
+  const nomineeSet = new Set(view.mayorNominees);
+  const candidates = view.players.filter((player) => player.alive && (!view.mayorNominees.length || nomineeSet.has(player.id)));
   useEffect(() => setTargetId(ownVote?.targetId ?? ""), [ownVote?.targetId]);
   return (
     <div className="content">
       <h2>Election du Maire</h2>
-      <p>Le Maire est une fonction publique, distincte des roles secrets. Il gere la parole et possede une voix double.</p>
+      <p>Le Maire est une fonction publique, distincte des roles secrets. Le vote est limite aux candidats nomines.</p>
+      <PublicVoteBoard title="Candidats Maire verrouilles" emptyText="Aucun candidat verrouille." details={view.mayorNominationDetails} totals={view.mayorNominationTotals} verb="a propose" />
       <p>{view.mayorVotes.length} vote(s) enregistres.</p>
       {canVote && <SelectTarget value={targetId} onChange={(value) => {
         setTargetId(value);
         if (value) socket.emit("electMayor", { code: view.code, targetId: value });
-      }} players={view.players.filter((player) => player.alive)} />}
+      }} players={candidates} />}
       <button className="primary" disabled={!targetId || !canVote} onClick={() => socket.emit("electMayor", { code: view.code, targetId })}>
         <Crown size={18} /> {ownVote ? "Changer mon vote" : "Voter pour le Maire"}
       </button>
@@ -908,6 +1033,7 @@ function NightPanel({ view }: { view: RoomView }) {
       <ActionBlock title="Agent Double">
         <PowerNotice view={view} />
         <div className="cards">{view.roleOptions?.map((option) => <button key={option} onClick={() => socket.emit("nightAction", { code: view.code, roleChoice: option })}>{ROLE_LABELS[option]}</button>)}</div>
+        <button onClick={() => socket.emit("finishNightStep", { code: view.code })}>Terminer mon tour</button>
       </ActionBlock>
     );
   }
@@ -922,7 +1048,7 @@ function NightPanel({ view }: { view: RoomView }) {
         <div className="actions-row">
           <button disabled={saveUsed} onClick={() => socket.emit("nightAction", { code: view.code, ministerAction: "save" })}>Sauver la victime</button>
           <button disabled={!targetId || jailUsed} onClick={() => socket.emit("nightAction", { code: view.code, ministerAction: "jail", targetId })}>Emprisonner cette personne</button>
-          <button onClick={() => socket.emit("nightAction", { code: view.code })}>Ne rien faire</button>
+          <button onClick={() => socket.emit("finishNightStep", { code: view.code })}>Terminer mon tour</button>
         </div>
       </ActionBlock>
     );
@@ -933,6 +1059,7 @@ function NightPanel({ view }: { view: RoomView }) {
       <ActionBlock title="Leader de Louange">
         <p>Vous pouvez entonner un cantique pour interrompre la nuit. Tout le monde ouvrira les yeux et le jeu passera au jour.</p>
         <button className="primary" onClick={() => socket.emit("nightAction", { code: view.code })}>Entonner un cantique</button>
+        <button onClick={() => socket.emit("finishNightStep", { code: view.code })}>Terminer mon tour</button>
       </ActionBlock>
     );
   }
@@ -952,7 +1079,10 @@ function NightPanel({ view }: { view: RoomView }) {
       <SelectTarget value={targetId} onChange={setTargetId} players={targets} />
       {view.currentNightStep === "infiltres" && <p className="muted">Seuls les Infiltres voient cette interface et designent une victime commune.</p>}
       {view.currentNightStep === "infiltres" && <InfiltratorVoteBoard view={view} />}
-      <button className="primary" disabled={!targetId} onClick={() => socket.emit("nightAction", { code: view.code, targetId })}>Valider</button>
+      <div className="actions-row">
+        <button className="primary" disabled={!targetId} onClick={() => socket.emit("nightAction", { code: view.code, targetId })}>Valider</button>
+        <button onClick={() => socket.emit("finishNightStep", { code: view.code })}>Valider et continuer</button>
+      </div>
     </ActionBlock>
   );
 }
@@ -1307,6 +1437,7 @@ function getTimerInfo(view: RoomView, now: number): TimerInfo | undefined {
 }
 
 function timerLabel(view: RoomView) {
+  if (view.phase === "MAYOR_NOMINATION") return "Nominations Maire";
   if (view.phase === "MAYOR_ELECTION") return "Election du Maire";
   if (view.phase === "NIGHT") return view.activeRole ? `${ROLE_LABELS[view.activeRole]}` : "Action de nuit";
   if (view.phase === "DEBATE") return "Debat";
@@ -1325,7 +1456,7 @@ function canHearRemote(view: RoomView, fromPlayerId: string) {
   if (view.phase === "LOBBY") return true;
   if (view.phase === "NIGHT") return view.currentNightStep === "infiltres" && view.you.role === "Infiltre";
   if (view.phase === "DEFENSE") return view.activePlayerId === fromPlayerId;
-  if (view.phase === "DAY_ANNOUNCEMENT" || view.phase === "DEBATE") return true;
+  if (["MAYOR_NOMINATION", "MAYOR_ELECTION", "DAY_ANNOUNCEMENT", "DEBATE", "NOMINATION", "DEFENSE_REQUESTS", "VOTING", "RESULT"].includes(view.phase)) return true;
   return false;
 }
 
@@ -1343,6 +1474,7 @@ function phaseLabel(phase: RoomView["phase"] | string) {
   const labels: Partial<Record<string, string>> = {
     LOBBY: "Lobby",
     ROLE_DISTRIBUTION: "Distribution",
+    MAYOR_NOMINATION: "Nominations Maire",
     MAYOR_ELECTION: "Election Maire",
     NIGHT: "Nuit",
     DAY_ANNOUNCEMENT: "Annonce jour",

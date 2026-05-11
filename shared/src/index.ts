@@ -20,6 +20,7 @@ export type AudioMode = "integrated" | "external";
 export type GamePhase =
   | "LOBBY"
   | "ROLE_DISTRIBUTION"
+  | "MAYOR_NOMINATION"
   | "MAYOR_ELECTION"
   | "NIGHT"
   | "DAY_ANNOUNCEMENT"
@@ -172,6 +173,10 @@ export type RoomView = {
   mayorVotes: VoteRecord[];
   mayorVoteDetails: VoteViewRecord[];
   mayorVoteTotals: VoteTotal[];
+  mayorNominations: VoteRecord[];
+  mayorNominationDetails: VoteViewRecord[];
+  mayorNominationTotals: VoteTotal[];
+  mayorNominees: string[];
   nominations: VoteRecord[];
   nominationDetails: VoteViewRecord[];
   nominationTotals: VoteTotal[];
@@ -221,11 +226,13 @@ export type ClientToServerEvents = {
   closeRoom: (payload: { code: string }) => void;
   leaveRoom: (payload: { code: string }) => void;
   startGame: (payload: { code: string }) => void;
+  nominateMayor: (payload: { code: string; targetId: string }) => void;
   electMayor: (payload: { code: string; targetId: string }) => void;
   adminNext: (payload: { code: string }) => void;
   endGame: (payload: { code: string }) => void;
   returnToLobby: (payload: { code: string }) => void;
   nightAction: (payload: { code: string; targetId?: string; roleChoice?: Role; ministerAction?: "save" | "jail" }) => void;
+  finishNightStep: (payload: { code: string }) => void;
   startDebate: (payload: { code: string; seconds?: number }) => void;
   grantSpeech: (payload: { code: string; playerId: string; seconds?: number }) => void;
   stopSpeech: (payload: { code: string }) => void;

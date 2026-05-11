@@ -53,6 +53,8 @@ type Room = {
   reserveRoles: Role[];
   night: NightState;
   votes: VoteRecord[];
+  mayorNominations: VoteRecord[];
+  mayorNominees: string[];
   mayorVotes: VoteRecord[];
   narrator: string;
   transition?: RoomView["transition"];
@@ -119,6 +121,8 @@ export class GameStore {
       reserveRoles: [],
       night: emptyNight(false),
       votes: [],
+      mayorNominations: [],
+      mayorNominees: [],
       mayorVotes: [],
       nominations: [],
       nominees: [],
@@ -294,7 +298,9 @@ export class GameStore {
     }
     room.phase = "ROLE_DISTRIBUTION";
     this.assignRoles(room);
-    room.phase = "MAYOR_ELECTION";
+    room.phase = "MAYOR_NOMINATION";
+    room.mayorNominations = [];
+    room.mayorNominees = [];
     room.mayorVotes = [];
     room.players.forEach((p) => {
       p.canVote = p.alive;
@@ -302,9 +308,24 @@ export class GameStore {
       p.audioActive = false;
       p.muted = room.audioMode === "integrated" ? !p.alive : p.muted;
     });
-    room.narrator = "Les roles sont distribues. L'election publique du Maire commence : chaque voix peut encore changer jusqu'au dernier instant.";
-    this.log(room, "phase", "Roles distribues et election du Maire ouverte.");
-    this.startTimer(room, room.config.durations.mayorElection, () => this.resolveMayorElection(room));
+    room.narrator = "Les roles sont distribues. Les nominations pour le Maire commencent : proposez publiquement les candidats.";
+    this.log(room, "phase", "Roles distribues et nominations du Maire ouvertes.");
+    this.startTimer(room, room.config.durations.mayorElection, () => this.startMayorVote(room));
+    this.emit(room);
+  }
+
+  nominateMayor(code: string, actorSocketId: string, targetId: string) {
+    const room = this.getRoom(code);
+    const voter = room?.players.find((p) => p.socketId === actorSocketId);
+    const target = room?.players.find((p) => p.id === targetId);
+    if (!room || !voter) return this.reject(actorSocketId, "Partie introuvable.");
+    if (room.phase !== "MAYOR_NOMINATION") return this.reject(actorSocketId, "Vous ne pouvez pas nominer de candidat Maire pendant cette phase.");
+    if (!voter.alive) return this.reject(actorSocketId, "Vous etes elimine.");
+    if (!voter.canVote) return this.reject(actorSocketId, "Vous ne pouvez pas nominer.");
+    if (!target?.alive) return this.reject(actorSocketId, "Cible invalide.");
+    room.mayorNominations = room.mayorNominations.filter((vote) => vote.voterId !== voter.id).concat({ voterId: voter.id, targetId });
+    this.log(room, "vote", `${voter.name} propose ${target.name} comme candidat Maire.`);
+    room.narrator = "Les candidatures au poste de Maire sont visibles publiquement. Chaque joueur peut encore modifier sa proposition.";
     this.emit(room);
   }
 
@@ -317,6 +338,7 @@ export class GameStore {
     if (!voter.alive) return this.reject(actorSocketId, "Vous etes elimine.");
     if (!voter.canVote) return this.reject(actorSocketId, "Vous ne pouvez pas voter.");
     if (!target?.alive) return this.reject(actorSocketId, "Cible invalide.");
+    if (room.mayorNominees.length && !room.mayorNominees.includes(target.id)) return this.reject(actorSocketId, "Le vote du Maire est limite aux candidats nomines.");
     room.mayorVotes = room.mayorVotes.filter((vote) => vote.voterId !== voter.id).concat({ voterId: voter.id, targetId });
     this.log(room, "vote", `${voter.name} vote pour ${target.name} comme Maire.`);
     const eligible = room.players.filter((p) => p.alive && p.canVote).length;
@@ -328,6 +350,7 @@ export class GameStore {
   adminNext(code: string, actorSocketId: string) {
     const room = this.requireHost(code, actorSocketId);
     if (!room) return;
+    if (room.phase === "MAYOR_NOMINATION") return this.startMayorVote(room);
     if (room.phase === "MAYOR_ELECTION") return this.resolveMayorElection(room);
     if (room.phase === "NIGHT") return this.advanceNight(room);
     if (room.phase === "DAY_ANNOUNCEMENT") return this.startTimedPhase(room, "DEBATE", room.config.durations.freeDebate, "Debat libre en cours. Les regards cherchent la faille.");
@@ -360,6 +383,8 @@ export class GameStore {
     room.reserveRoles = [];
     room.night = emptyNight(false);
     room.votes = [];
+    room.mayorNominations = [];
+    room.mayorNominees = [];
     room.mayorVotes = [];
     room.nominations = [];
     room.nominees = [];
@@ -470,6 +495,17 @@ export class GameStore {
       return this.reject(actorSocketId, "Cible invalide.");
     }
     return this.reject(actorSocketId, "Ce n'est pas a votre role d'agir maintenant.");
+  }
+
+  finishNightStep(code: string, actorSocketId: string) {
+    const room = this.getRoom(code);
+    const actor = room?.players.find((p) => p.socketId === actorSocketId);
+    const step = room?.phase === "NIGHT" ? room.night.steps[room.night.stepIndex] : undefined;
+    if (!room || !actor || !step) return this.reject(actorSocketId, "Partie introuvable.");
+    if (step === "infiltres" && actor.role === "Guetteuse") return this.reject(actorSocketId, "La Guetteuse observe mais ne termine pas le tour des Infiltres.");
+    if (!canActFor(actor, room, step)) return this.reject(actorSocketId, "Ce n'est pas a votre tour de terminer cette phase.");
+    this.log(room, "phase", `${actor.name} termine volontairement l'etape ${step}.`);
+    this.completeStep(room, step);
   }
 
   startDebate(code: string, actorSocketId: string, seconds?: number) {
@@ -676,6 +712,26 @@ export class GameStore {
     this.startNight(room);
   }
 
+  private startMayorVote(room: Room) {
+    this.clearTimer(room);
+    room.phase = "MAYOR_ELECTION";
+    room.mayorNominees = Array.from(new Set(room.mayorNominations.map((vote) => vote.targetId))).filter((id) => room.players.some((p) => p.id === id && p.alive));
+    if (!room.mayorNominees.length) room.mayorNominees = room.players.filter((p) => p.alive).map((p) => p.id);
+    room.mayorVotes = [];
+    room.players.forEach((p) => {
+      p.canVote = p.alive;
+      p.canSpeak = p.alive;
+      p.speaking = false;
+      p.audioActive = false;
+      if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
+    });
+    const names = room.mayorNominees.map((id) => room.players.find((p) => p.id === id)?.name).filter(Boolean).join(", ");
+    room.narrator = `Candidats Maire verrouilles : ${names}. Votez uniquement parmi les candidats nomines.`;
+    this.log(room, "phase", `Vote du Maire ouvert pour : ${names}.`);
+    this.startTimer(room, room.config.durations.mayorElection, () => this.resolveMayorElection(room));
+    this.emit(room);
+  }
+
   private startNomination(room: Room) {
     this.clearTimer(room);
     room.phase = "NOMINATION";
@@ -687,9 +743,9 @@ export class GameStore {
     room.revoteTargets = undefined;
     room.players.forEach((p) => {
       p.speaking = false;
-      p.canSpeak = false;
+      p.canSpeak = p.alive;
       p.audioActive = false;
-      if (room.audioMode === "integrated") p.muted = true;
+      if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
     });
     room.narrator = NarrationService.fallback({ type: "nomination", phase: room.phase, round: room.round }, "Les nominations sont ouvertes. Chaque joueur vivant peut designer un suspect, et peut changer d'avis avant la fin.");
     this.log(room, "phase", "Nominations ouvertes.");
@@ -714,9 +770,9 @@ export class GameStore {
     room.defenseRequests = [];
     room.players.forEach((p) => {
       p.speaking = false;
-      p.canSpeak = false;
+      p.canSpeak = p.alive;
       p.audioActive = false;
-      if (room.audioMode === "integrated") p.muted = true;
+      if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
     });
     const nomineeNames = room.nominees.map((id) => room.players.find((p) => p.id === id)?.name).filter(Boolean).join(", ");
     room.narrator = `Nominations verrouillees : ${nomineeNames}. Les nomines peuvent demander une defense au Maire.`;
@@ -743,9 +799,9 @@ export class GameStore {
     }
     room.players.forEach((p) => {
       p.speaking = false;
-      p.canSpeak = false;
+      p.canSpeak = p.alive;
       p.audioActive = false;
-      if (room.audioMode === "integrated") p.muted = true;
+      if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
     });
     if (shouldAutoVoteAfterDefenseRequests(room)) return this.startVoteFromDefenseRequests(room);
     room.phase = "DEFENSE_REQUESTS";
@@ -939,6 +995,8 @@ export class GameStore {
     room.lastResult = message;
     room.transition = undefined;
     room.votes = [];
+    room.mayorNominations = [];
+    room.mayorNominees = [];
     room.mayorVotes = [];
     room.nominations = [];
     room.nominees = [];
@@ -965,9 +1023,9 @@ export class GameStore {
       room.votes = [];
       room.players.forEach((p) => {
         p.speaking = false;
-        p.canSpeak = false;
+        p.canSpeak = p.alive;
         p.audioActive = false;
-        if (room.audioMode === "integrated") p.muted = p.alive || (!p.alive && !room.config.deadCanHearAudio);
+        if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
       });
     } else if (phase === "DEBATE") {
       room.players.forEach((p) => {
@@ -1169,6 +1227,10 @@ export class GameStore {
       mayorVotes: room.phase === "MAYOR_ELECTION" ? room.mayorVotes : [],
       mayorVoteDetails: room.phase === "MAYOR_ELECTION" ? voteDetailsFor(room.mayorVotes, room, false) : [],
       mayorVoteTotals: room.phase === "MAYOR_ELECTION" ? voteTotalsFor(room.mayorVotes, room, false) : [],
+      mayorNominations: room.phase === "MAYOR_NOMINATION" || room.phase === "MAYOR_ELECTION" ? room.mayorNominations : [],
+      mayorNominationDetails: room.phase === "MAYOR_NOMINATION" || room.phase === "MAYOR_ELECTION" ? voteDetailsFor(room.mayorNominations, room, false) : [],
+      mayorNominationTotals: room.phase === "MAYOR_NOMINATION" || room.phase === "MAYOR_ELECTION" ? voteTotalsFor(room.mayorNominations, room, false) : [],
+      mayorNominees: room.phase === "MAYOR_NOMINATION" || room.phase === "MAYOR_ELECTION" ? room.mayorNominees : [],
       nominations: showsNominations(room.phase) ? room.nominations : [],
       nominationDetails: showsNominations(room.phase) ? voteDetailsFor(room.nominations, room, false) : [],
       nominationTotals: showsNominations(room.phase) ? voteTotalsFor(room.nominations, room, false) : [],
@@ -1221,18 +1283,18 @@ function createPlayer(name: string, socketId: string, sessionId: string, isHost:
 }
 
 function publicPlayer(player: Player, room: Room, activeStep?: NightStep, viewer?: Player): PlayerPublic {
-  const hidePrivateInfiltratorAudio = activeStep === "infiltres" && player.role === "Infiltre" && !canSeeInfiltratorChannel(viewer, room);
+  const neutralizeNightAudio = activeStep === "infiltres" && !canSeeNightAudioState(viewer, player, room);
   return {
     id: player.id,
     name: player.name,
     connected: player.connected,
     alive: player.alive,
     canVote: player.canVote,
-    canSpeak: hidePrivateInfiltratorAudio ? false : player.canSpeak,
+    canSpeak: neutralizeNightAudio ? false : player.canSpeak,
     canAct: viewer?.id === player.id ? canActFor(player, room, activeStep) : false,
-    muted: hidePrivateInfiltratorAudio ? true : player.muted,
-    speaking: hidePrivateInfiltratorAudio ? false : player.speaking,
-    audioActive: hidePrivateInfiltratorAudio ? false : player.audioActive,
+    muted: neutralizeNightAudio ? true : player.muted,
+    speaking: neutralizeNightAudio ? false : player.speaking,
+    audioActive: neutralizeNightAudio ? false : player.audioActive,
     isHost: player.isHost,
     isMayor: player.id === room.mayorId,
     revealedRole: player.revealedRole
@@ -1292,7 +1354,7 @@ function visibleActivePlayerId(room: Room, viewer?: Player) {
   const speaker = room.players.find((p) => p.speaking);
   if (!speaker) return undefined;
   const activeStep = room.phase === "NIGHT" ? room.night.steps[room.night.stepIndex] : undefined;
-  if (activeStep === "infiltres" && speaker.role === "Infiltre" && !canSeeInfiltratorChannel(viewer, room)) return undefined;
+  if (activeStep === "infiltres" && !canSeeNightAudioState(viewer, speaker, room)) return undefined;
   return speaker.id;
 }
 
@@ -1304,6 +1366,13 @@ function canSeeInfiltratorVotes(player: Player | undefined, room: Room, activeSt
   return room.phase === "NIGHT" && activeStep === "infiltres" && !!player?.alive && player.role === "Infiltre";
 }
 
+function canSeeNightAudioState(viewer: Player | undefined, target: Player, room: Room) {
+  if (room.phase !== "NIGHT" || room.night.steps[room.night.stepIndex] !== "infiltres" || !viewer?.alive) return true;
+  if (viewer.role === "Infiltre") return target.role === "Infiltre" || target.role === "Guetteuse" || target.id === viewer.id;
+  if (viewer.role === "Guetteuse") return target.role === "Infiltre" || target.id === viewer.id;
+  return false;
+}
+
 function canHearPlayer(listener: Player, speaker: Player, room: Room) {
   if (room.audioMode !== "integrated" || room.phase === "GAME_OVER") return false;
   if (!listener.alive && !room.config.deadCanHearAudio) return false;
@@ -1311,13 +1380,13 @@ function canHearPlayer(listener: Player, speaker: Player, room: Room) {
   if (room.phase === "LOBBY") return true;
   if (room.phase === "NIGHT") return canSeeInfiltratorChannel(listener, room) && speaker.role === "Infiltre";
   if (room.phase === "DEFENSE") return room.players.some((p) => p.id === speaker.id && p.speaking);
-  return room.phase === "DAY_ANNOUNCEMENT" || room.phase === "DEBATE";
+  return ["MAYOR_NOMINATION", "MAYOR_ELECTION", "DAY_ANNOUNCEMENT", "DEBATE", "NOMINATION", "DEFENSE_REQUESTS", "VOTING", "RESULT"].includes(room.phase);
 }
 
 function canUseIntegratedAudio(player: Player, room: Room) {
   if (room.audioMode !== "integrated" || room.phase === "GAME_OVER") return false;
   if (room.phase === "LOBBY") return true;
-  if (room.phase === "NIGHT") return canSeeInfiltratorChannel(player, room);
+  if (room.phase === "NIGHT") return room.night.steps[room.night.stepIndex] === "infiltres" && player.alive && (player.role === "Infiltre" || player.role === "Guetteuse");
   return player.alive || room.config.deadCanHearAudio;
 }
 
@@ -1333,7 +1402,7 @@ function applyIntegratedAudioState(room: Room) {
   if (room.phase === "NIGHT") {
     const activeStep = room.night.steps[room.night.stepIndex];
     room.players.forEach((player) => {
-      const canSpeakAtNight = player.alive && activeStep === "infiltres" && player.role === "Infiltre";
+      const canSpeakAtNight = player.alive && activeStep === "infiltres" && (player.role === "Infiltre" || player.role === "Guetteuse");
       player.canSpeak = canSpeakAtNight;
       player.speaking = false;
       player.audioActive = false;
