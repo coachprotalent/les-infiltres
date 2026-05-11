@@ -15,6 +15,7 @@ Application web multijoueur temps réel inspirée du jeu Les Infiltrés, avec lo
 - Journal de partie visible par l'hôte et en fin de partie.
 - Narrateur automatique côté navigateur.
 - Audio externe ou audio intégré optionnel.
+- Bots IA jouables côté serveur avec contexte filtré et actions validées.
 - WebSocket Socket.IO pour l'état temps réel.
 
 ## Prérequis
@@ -113,6 +114,49 @@ CLIENT_URL=http://localhost:5173
 - `ADMIN_PASSWORD` : mot de passe administrateur.
 
 Le frontend n'utilise pas de variable Vite actuellement. En production, il se connecte au backend par la même origine que la page servie.
+
+## Bots IA
+
+Les bots IA sont des joueurs serveur. Ils comptent dans le nombre de joueurs, reçoivent un rôle normal, peuvent être nommés, voter, être élus Maire, agir la nuit et écrire dans le chat visible. Ils ne disposent pas de socket navigateur et toutes leurs actions sont validées par le moteur de jeu avant application.
+
+Configuration backend :
+
+```env
+AZURE_OPENAI_ENDPOINT=https://<ressource>.openai.azure.com
+AZURE_OPENAI_API_KEY=<cle serveur>
+AZURE_OPENAI_API_VERSION=2025-04-01-preview
+AZURE_OPENAI_REALTIME_DEPLOYMENT=gpt-realtime-1.5
+BOT_AI_ENABLED=true
+BOT_MAX_PER_ROOM=5
+BOT_DEFAULT_PARTICIPATION=normal
+BOT_AUDIO_ENABLED=false
+```
+
+`AZURE_OPENAI_REALTIME_DEPLOYMENT` doit correspondre au nom du déploiement Azure AI Foundry. Le projet prépare l'intégration audio temps réel, mais le MVP utilise le backend pour demander des actions JSON textuelles au modèle et garde `BOT_AUDIO_ENABLED=false` par défaut. Adaptez `AZURE_OPENAI_API_VERSION` à la version supportée par votre ressource Azure. La documentation Microsoft décrit l'endpoint Realtime Azure OpenAI via `openai/v1/realtime` pour les usages audio/temps réel : https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/realtime-audio-websockets
+
+Utilisation :
+
+- Dans le lobby, l'hôte voit les contrôles IA seulement si Azure OpenAI est configuré et `BOT_AI_ENABLED=true`.
+- **Ajouter un bot IA** ajoute un joueur nommé `Bot ...`.
+- **Ajouter N bots** ajoute plusieurs bots dans la limite `BOT_MAX_PER_ROOM` et `maxPlayers`.
+- **Compléter jusqu'à X** ajoute uniquement les bots manquants pour atteindre la taille demandée.
+
+Sécurité anti-triche :
+
+- La clé Azure reste uniquement dans le backend.
+- Le frontend ne reçoit jamais la clé, ni le prompt système.
+- Le service `BotRealtimeAIService` ne reçoit jamais l'objet room complet.
+- Le contexte envoyé au modèle est filtré : rôle du bot, phase, joueurs vivants, messages visibles, votes publics, informations privées propres au rôle.
+- Les rôles secrets des autres joueurs, actions de nuit cachées et informations réservées aux autres rôles ne sont pas envoyés.
+- Le modèle retourne uniquement une action JSON structurée (`speak`, `vote`, `nominate`, `nightAction`, etc.).
+- Le serveur revalide la phase, la cible, l'état du bot et les droits avant d'appliquer l'action.
+
+Fallback et limites :
+
+- Sans configuration Azure, l'application fonctionne normalement et le lobby affiche que les bots IA sont désactivés.
+- Si Azure répond en erreur ou renvoie une action invalide, le bot passe son tour et la partie continue.
+- Les bots parlent en texte pour le MVP. La voix temps réel et l'écoute audio pourront être ajoutées ensuite au service dédié.
+- Les appels Azure peuvent générer des coûts selon le nombre de bots, la durée des parties et le volume de messages.
 
 ## Administration
 

@@ -67,6 +67,7 @@ export type PowerStatus = {
 export type PlayerPublic = {
   id: string;
   name: string;
+  isBot: boolean;
   connected: boolean;
   alive: boolean;
   canVote: boolean;
@@ -83,6 +84,15 @@ export type PlayerPublic = {
 export type VoteRecord = {
   voterId: string;
   targetId: string;
+};
+
+export type ChatMessage = {
+  id: string;
+  at: number;
+  playerId: string;
+  playerName: string;
+  text: string;
+  scope: "public" | "infiltres";
 };
 
 export type VoteViewRecord = VoteRecord & {
@@ -141,6 +151,11 @@ export type RoomView = {
   round: number;
   config: GameConfig;
   lobby: LobbyInfo;
+  botAi: {
+    enabled: boolean;
+    maxPerRoom: number;
+    audioEnabled: boolean;
+  };
   players: PlayerPublic[];
   you?: {
     id: string;
@@ -182,6 +197,7 @@ export type RoomView = {
   nominationTotals: VoteTotal[];
   nominees: string[];
   defenseRequests: DefenseRequest[];
+  chatMessages: ChatMessage[];
   infiltratorVotes?: InfiltratorVoteView[];
   infiltratorVoteLeader?: VoteTotal;
   lastResult?: string;
@@ -204,7 +220,7 @@ export type AdminRoomSummary = {
 };
 
 export type AdminRoomDetails = AdminRoomSummary & {
-  players: Pick<PlayerPublic, "id" | "name" | "connected" | "alive" | "isHost" | "isMayor">[];
+  players: Pick<PlayerPublic, "id" | "name" | "isBot" | "connected" | "alive" | "isHost" | "isMayor">[];
   round: number;
 };
 
@@ -226,6 +242,9 @@ export type ClientToServerEvents = {
   closeRoom: (payload: { code: string }) => void;
   leaveRoom: (payload: { code: string }) => void;
   startGame: (payload: { code: string }) => void;
+  addBot: (payload: { code: string }) => void;
+  addBots: (payload: { code: string; count: number }) => void;
+  fillWithBots: (payload: { code: string; targetCount: number }) => void;
   nominateMayor: (payload: { code: string; targetId: string }) => void;
   electMayor: (payload: { code: string; targetId: string }) => void;
   adminNext: (payload: { code: string }) => void;
@@ -242,6 +261,7 @@ export type ClientToServerEvents = {
   denyDefense: (payload: { code: string; playerId: string }) => void;
   startVote: (payload: { code: string; seconds?: number }) => void;
   vote: (payload: { code: string; targetId: string }) => void;
+  sendChat: (payload: { code: string; text: string }) => void;
   setMuted: (payload: { code: string; playerId: string; muted: boolean }) => void;
   audioActivity: (payload: { code: string; speaking: boolean }) => void;
   rtcSignal: (payload: { code: string; to: string; signal: unknown }) => void;

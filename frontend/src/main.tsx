@@ -276,7 +276,7 @@ function AdminPage({ onBack }: { onBack: () => void }) {
             <div className="players">
               {details.players.map((player) => (
                 <div className={`player ${player.alive ? "" : "out"}`} key={player.id}>
-                  <span>{player.name}{player.isHost ? " - Hote" : ""}{player.isMayor ? " - Maire" : ""}</span>
+                  <span>{player.name}{player.isBot ? " - IA" : ""}{player.isHost ? " - Hote" : ""}{player.isMayor ? " - Maire" : ""}</span>
                   <small>{player.connected ? "en ligne" : "deconnecte"} - {player.alive ? "en jeu" : "elimine"}</small>
                 </div>
               ))}
@@ -369,6 +369,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
         <section className="panel main-panel">
           <PhaseIntro view={view} />
           <PhaseContent view={view} timer={timer} onLeaveRoom={onLeaveRoom} />
+          {view.phase !== "LOBBY" && view.phase !== "GAME_OVER" && <ChatPanel view={view} />}
         </section>
 
         <aside className="panel side-panel">
@@ -377,7 +378,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
           <div className="players">
             {view.players.map((player) => (
               <div className={`player ${player.alive ? "" : "out"} ${player.speaking ? "speaking" : ""} ${player.audioActive ? "audio-active" : ""}`} key={player.id}>
-                <span>{player.name}{player.isMayor ? " - Maire" : ""}{player.isHost ? " - Hote" : ""}</span>
+                <span>{player.name}{player.isBot ? " - IA" : ""}{player.isMayor ? " - Maire" : ""}{player.isHost ? " - Hote" : ""}</span>
                 <small>
                   {player.connected ? "en ligne" : "deconnecte"}
                   {!player.canVote && player.alive ? " - sans vote" : ""}
@@ -730,6 +731,8 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
 function Lobby({ view }: { view: RoomView }) {
   const [draft, setDraft] = useState(view.config);
   const [editing, setEditing] = useState(false);
+  const [botCount, setBotCount] = useState(1);
+  const [botTarget, setBotTarget] = useState(Math.max(view.lobby.minPlayers, view.lobby.playerCount));
   const canStart = view.lobby.playerCount >= view.lobby.minPlayers;
 
   useEffect(() => setDraft(view.config), [view.config]);
@@ -759,6 +762,30 @@ function Lobby({ view }: { view: RoomView }) {
         <div className="actions-row">
           <button onClick={() => setEditing((value) => !value)}>{editing ? "Retour au lobby" : "Modifier la configuration"}</button>
           <button className="danger" onClick={closeRoom}>Fermer le salon</button>
+        </div>
+      )}
+      {view.you?.isHost && (
+        <div className="bot-controls">
+          <h3>Joueurs IA</h3>
+          {view.botAi.enabled ? (
+            <>
+              <div className="config-grid">
+                <ConfigField label="Nombre de bots" help={`Maximum par salon : ${view.botAi.maxPerRoom}.`}>
+                  <NumericConfigInput value={botCount} min={1} max={view.botAi.maxPerRoom} onCommit={setBotCount} />
+                </ConfigField>
+                <ConfigField label="Completer jusqu'a" help="Ajoute uniquement les bots manquants pour atteindre ce nombre de joueurs.">
+                  <NumericConfigInput value={botTarget} min={view.lobby.minPlayers} max={view.lobby.maxPlayers} onCommit={setBotTarget} />
+                </ConfigField>
+              </div>
+              <div className="actions-row">
+                <button onClick={() => socket.emit("addBot", { code: view.code })}>Ajouter un bot IA</button>
+                <button onClick={() => socket.emit("addBots", { code: view.code, count: botCount })}>Ajouter {botCount} bot(s)</button>
+                <button onClick={() => socket.emit("fillWithBots", { code: view.code, targetCount: botTarget })}>Completer jusqu'a {botTarget}</button>
+              </div>
+            </>
+          ) : (
+            <p className="muted">Bots IA desactives. Configurez Azure OpenAI cote serveur pour les activer.</p>
+          )}
         </div>
       )}
       {view.you?.isHost && editing && (
@@ -1106,6 +1133,38 @@ function PowerNotice({ view }: { view: RoomView }) {
   const used = view.you?.powerStatuses.filter((power) => power.used) ?? [];
   if (!used.length) return null;
   return <p className="used-power">Pouvoir deja utilise : {used.map((power) => power.label).join(", ")}</p>;
+}
+
+function ChatPanel({ view }: { view: RoomView }) {
+  const [text, setText] = useState("");
+  const me = currentPlayer(view);
+  const canChat = !!view.you?.alive && !!view.you.canSpeak && !me?.muted && !(view.phase === "NIGHT" && view.you.role !== "Infiltre");
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const clean = text.trim();
+    if (!clean) return;
+    socket.emit("sendChat", { code: view.code, text: clean });
+    setText("");
+  };
+  return (
+    <div className="chat-panel">
+      <h3>Messages</h3>
+      <div className="chat-log">
+        {view.chatMessages.length ? view.chatMessages.slice(-12).map((message) => (
+          <p key={message.id} className={message.scope === "infiltres" ? "private-message" : ""}>
+            <strong>{message.playerName}</strong> {message.scope === "infiltres" ? <span>Infiltres</span> : null}
+            {message.text}
+          </p>
+        )) : <p className="muted">Aucun message visible.</p>}
+      </div>
+      {canChat && (
+        <form className="chat-form" onSubmit={submit}>
+          <input value={text} onChange={(event) => setText(event.target.value)} maxLength={280} placeholder="Ecrire un message" />
+          <button>Envoyer</button>
+        </form>
+      )}
+    </div>
+  );
 }
 
 function DebatePanel({ view, timer }: { view: RoomView; timer?: TimerInfo }) {

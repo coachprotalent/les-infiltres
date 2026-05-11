@@ -592,6 +592,52 @@ p {
   border-bottom: 1px solid rgba(242, 240, 231, 0.12);
 }
 
+.bot-controls,
+.chat-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(242, 240, 231, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.chat-panel {
+  margin-top: 16px;
+}
+
+.chat-log {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.chat-log p {
+  margin: 0;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.chat-log span {
+  color: #dfb95b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.chat-log .private-message {
+  border: 1px solid rgba(223, 185, 91, 0.28);
+}
+
+.chat-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
 .phase-intro {
   display: grid;
   grid-template-columns: 1fr auto;

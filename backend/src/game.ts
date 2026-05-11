@@ -1,12 +1,14 @@
 import crypto from "node:crypto";
-import type { AdminRoomDetails, AdminRoomSummary, AudioMode, DefenseRequest, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
+import type { AdminRoomDetails, AdminRoomSummary, AudioMode, ChatMessage, DefenseRequest, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
 import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, mergeConfig } from "@les-infiltres/shared";
+import { BotRealtimeAIService, type BotAIContext, type BotAllowedAction, type BotDecision } from "./botRealtimeAI.js";
 import { NarrationService } from "./narration.js";
 
 type Player = {
   id: string;
   sessionId: string;
   name: string;
+  isBot: boolean;
   role?: Role;
   connected: boolean;
   alive: boolean;
@@ -72,6 +74,8 @@ type Room = {
   nominations: VoteRecord[];
   nominees: string[];
   defenseRequests: DefenseRequest[];
+  chatMessages: ChatMessage[];
+  botActionKeys: Set<string>;
 };
 
 const NIGHT_STEPS_FIRST: NightStep[] = ["agent-double", "hackeuse", "avocate", "lanceuse-alerte", "infiltres", "ministre"];
@@ -87,12 +91,14 @@ const stepRole: Partial<Record<NightStep, Role>> = {
 };
 
 const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const BOT_NAMES = ["Bot Elias", "Bot Naomi", "Bot Caleb", "Bot Myriam", "Bot Samuel", "Bot Esther", "Bot Ruth", "Bot Jonas", "Bot Sarah", "Bot Daniel"];
 
 export class GameStore {
   private rooms = new Map<string, Room>();
   private onChange: (room: Room) => void = () => undefined;
   private onToast: (socketId: string, message: string) => void = () => undefined;
   private onClose: (socketId: string, message: string) => void = () => undefined;
+  private botAi = new BotRealtimeAIService();
 
   setBroadcaster(onChange: (room: Room) => void) {
     this.onChange = onChange;
@@ -127,6 +133,8 @@ export class GameStore {
       nominations: [],
       nominees: [],
       defenseRequests: [],
+      chatMessages: [],
+      botActionKeys: new Set(),
       narrator: "Salle creee. En attente des joueurs.",
       powers: emptyPowers(),
       pastorAttemptedIds: new Set(),
@@ -151,6 +159,7 @@ export class GameStore {
       players: room.players.map((player) => ({
         id: player.id,
         name: player.name,
+        isBot: player.isBot,
         connected: player.connected,
         alive: player.alive,
         isHost: player.id === room.hostId,
@@ -188,6 +197,34 @@ export class GameStore {
     this.log(room, "system", `${player.name} rejoint la salle.`);
     this.emit(room);
     return { ok: true as const, view: this.viewFor(room, player.id) };
+  }
+
+  addBot(code: string, actorSocketId: string) {
+    return this.addBots(code, actorSocketId, 1);
+  }
+
+  addBots(code: string, actorSocketId: string, count: number) {
+    const room = this.requireHost(code, actorSocketId);
+    if (!room) return;
+    if (room.phase !== "LOBBY") return this.reject(actorSocketId, "Les bots ne peuvent etre ajoutes que dans le lobby.");
+    if (!this.botAi.enabled) return this.reject(actorSocketId, "Bots IA desactives : configurez Azure OpenAI cote serveur.");
+    const existingBots = room.players.filter((p) => p.isBot).length;
+    const allowed = Math.min(Math.max(0, Math.floor(count)), this.botAi.maxPerRoom - existingBots, room.config.maxPlayers - room.players.length);
+    if (allowed <= 0) return this.reject(actorSocketId, "Impossible d'ajouter plus de bots dans ce salon.");
+    for (let index = 0; index < allowed; index += 1) {
+      room.players.push(createBotPlayer(this.nextBotName(room)));
+    }
+    room.narrator = `${allowed} bot(s) IA ajoute(s) au lobby.`;
+    this.log(room, "system", `${allowed} bot(s) IA ajoute(s).`);
+    this.emit(room);
+  }
+
+  fillWithBots(code: string, actorSocketId: string, targetCount: number) {
+    const room = this.requireHost(code, actorSocketId);
+    if (!room) return;
+    const missing = Math.max(0, Math.min(room.config.maxPlayers, Math.floor(targetCount)) - room.players.length);
+    if (!missing) return this.reject(actorSocketId, "Le salon a deja atteint cette taille.");
+    this.addBots(code, actorSocketId, missing);
   }
 
   reconnect(code: string, sessionId: string, socketId: string) {
@@ -299,6 +336,8 @@ export class GameStore {
     room.phase = "ROLE_DISTRIBUTION";
     this.assignRoles(room);
     room.phase = "MAYOR_NOMINATION";
+    room.botActionKeys = new Set();
+    room.chatMessages = [];
     room.mayorNominations = [];
     room.mayorNominees = [];
     room.mayorVotes = [];
@@ -378,6 +417,8 @@ export class GameStore {
     if (room.phase !== "GAME_OVER") return this.reject(actorSocketId, "La partie doit etre terminee avant de revenir au lobby.");
     this.clearTimer(room);
     room.phase = "LOBBY";
+    room.players = room.players.filter((player) => !player.isBot);
+    if (!room.players.some((player) => player.id === room.hostId)) room.hostId = room.players[0]?.id ?? room.hostId;
     room.round = 0;
     room.mayorId = undefined;
     room.reserveRoles = [];
@@ -389,6 +430,8 @@ export class GameStore {
     room.nominations = [];
     room.nominees = [];
     room.defenseRequests = [];
+    room.chatMessages = [];
+    room.botActionKeys = new Set();
     room.transition = undefined;
     room.timerStartedAt = undefined;
     room.timerDuration = undefined;
@@ -659,6 +702,15 @@ export class GameStore {
     if (!muted && !target.canSpeak) return this.reject(actorSocketId, "Ce joueur n'a pas le droit de parler maintenant.");
     target.muted = muted;
     if (muted) target.audioActive = false;
+    this.emit(room);
+  }
+
+  sendChat(code: string, actorSocketId: string, text: string) {
+    const room = this.getRoom(code);
+    const actor = room?.players.find((p) => p.socketId === actorSocketId);
+    if (!room || !actor) return this.reject(actorSocketId, "Partie introuvable.");
+    if (!canSendChat(actor, room)) return this.reject(actorSocketId, "Vous ne pouvez pas parler maintenant.");
+    this.addChatMessage(room, actor, text, chatScopeFor(actor, room));
     this.emit(room);
   }
 
@@ -1089,6 +1141,228 @@ export class GameStore {
     return room.players.find((p) => p.alive)?.id;
   }
 
+  private nextBotName(room: Room) {
+    const used = new Set(room.players.map((p) => p.name));
+    const base = BOT_NAMES.find((name) => !used.has(name)) ?? `Bot ${room.players.filter((p) => p.isBot).length + 1}`;
+    if (!used.has(base)) return base;
+    let suffix = 2;
+    while (used.has(`${base} ${suffix}`)) suffix += 1;
+    return `${base} ${suffix}`;
+  }
+
+  private scheduleBotTurns(room: Room) {
+    if (!this.botAi.enabled || room.phase === "LOBBY" || room.phase === "GAME_OVER") return;
+    const candidates = room.players.filter((p) => p.isBot && p.alive);
+    for (const bot of candidates) {
+      const key = this.botActionKey(room, bot);
+      if (!key || room.botActionKeys.has(key)) continue;
+      room.botActionKeys.add(key);
+      const delay = 500 + Math.floor(Math.random() * 1400);
+      setTimeout(() => void this.runBotTurn(room.code, bot.id, key), delay);
+    }
+  }
+
+  private botActionKey(room: Room, bot: Player) {
+    if (!bot.role && room.phase !== "MAYOR_NOMINATION" && room.phase !== "MAYOR_ELECTION") return undefined;
+    const step = room.phase === "NIGHT" ? room.night.steps[room.night.stepIndex] : undefined;
+    if (room.phase === "DAY_ANNOUNCEMENT") return bot.id === room.mayorId ? `${room.round}:${room.phase}:${bot.id}` : undefined;
+    if (room.phase === "DEFENSE_REQUESTS") {
+      if (bot.id === room.mayorId && room.defenseRequests.some((request) => request.status === "pending")) return `${room.round}:${room.phase}:mayor:${bot.id}:${room.defenseRequests.length}`;
+      if (room.nominees.includes(bot.id) && !room.defenseRequests.some((request) => request.playerId === bot.id)) return `${room.round}:${room.phase}:request:${bot.id}`;
+      return undefined;
+    }
+    if (room.phase === "DEFENSE") return room.players.some((p) => p.id === bot.id && p.speaking) ? `${room.round}:${room.phase}:${bot.id}` : undefined;
+    if (room.phase === "NIGHT") return step && canActFor(bot, room, step) && !(step === "infiltres" && bot.role === "Guetteuse") ? `${room.round}:${room.phase}:${step}:${bot.id}` : undefined;
+    if (["MAYOR_NOMINATION", "MAYOR_ELECTION", "DEBATE", "NOMINATION", "VOTING"].includes(room.phase)) return `${room.round}:${room.phase}:${bot.id}`;
+    return undefined;
+  }
+
+  private async runBotTurn(code: string, botId: string, key: string) {
+    const room = this.getRoom(code);
+    const bot = room?.players.find((p) => p.id === botId && p.isBot);
+    if (!room || !bot?.alive) return;
+    if (this.botActionKey(room, bot) !== key) return;
+    if (room.phase === "DAY_ANNOUNCEMENT" && bot.id === room.mayorId) {
+      this.startTimedPhase(room, "DEBATE", room.config.durations.freeDebate, "Le Maire ouvre le debat.");
+      return;
+    }
+    if (room.phase === "DEFENSE_REQUESTS" && bot.id === room.mayorId) {
+      const request = room.defenseRequests.find((item) => item.status === "pending");
+      if (request) {
+        const target = room.players.find((p) => p.id === request.playerId && p.alive);
+        if (target) {
+          request.status = "granted";
+          room.phase = "DEFENSE";
+          room.players.forEach((p) => {
+            p.speaking = p.id === target.id;
+            p.canSpeak = p.alive && p.id === target.id;
+            p.audioActive = false;
+            p.muted = room.audioMode === "integrated" ? p.id !== target.id : p.muted;
+          });
+          this.startTimer(room, room.config.durations.defense, () => this.stopSpeech(room));
+          room.narrator = `${target.name} a la parole pour sa defense.`;
+          this.log(room, "phase", `Defense accordee par le Maire IA a ${target.name}.`);
+          this.emit(room);
+          this.scheduleBotTurns(room);
+        }
+      }
+      return;
+    }
+    const context = this.botContext(room, bot);
+    const decision = await this.botAi.decide(context);
+    if (!decision) {
+      this.log(room, "system", `${bot.name} passe son tour IA.`);
+      if (room.phase === "NIGHT" && context.allowedActions.includes("nightAction")) this.completeStep(room, room.night.steps[room.night.stepIndex]);
+      return;
+    }
+    this.applyBotDecision(room, bot, decision);
+  }
+
+  private botContext(room: Room, bot: Player): BotAIContext {
+    const activeStep = room.phase === "NIGHT" ? room.night.steps[room.night.stepIndex] : undefined;
+    const allowedActions = botAllowedActions(room, bot, activeStep);
+    const visibleMessages = visibleChatMessages(room, bot);
+    const nominatedPlayers = (room.phase === "MAYOR_ELECTION" ? room.mayorNominees : room.nominees)
+      .map((id) => room.players.find((p) => p.id === id && p.alive))
+      .filter((p): p is Player => !!p)
+      .map((p) => ({ id: p.id, name: p.name }));
+    const currentVoteState = room.phase === "MAYOR_ELECTION"
+      ? { votes: voteDetailsFor(room.mayorVotes, room, false), totals: voteTotalsFor(room.mayorVotes, room, false) }
+      : room.phase === "VOTING"
+        ? { votes: voteDetailsFor(room.votes, room, true), totals: voteTotalsFor(room.votes, room, true) }
+        : { votes: [], totals: [] };
+    return {
+      botName: bot.name,
+      botRole: bot.role,
+      phase: room.phase,
+      currentNightStep: activeStep,
+      publicEvents: botVisibleEvents(room, bot),
+      visibleMessages,
+      alivePlayers: room.players.filter((p) => p.alive).map((p) => ({ id: p.id, name: p.name, isSelf: p.id === bot.id, isMayor: p.id === room.mayorId })),
+      nominatedPlayers,
+      currentVoteState,
+      privateRoleInfo: botPrivateInfo(room, bot, activeStep),
+      allowedActions
+    };
+  }
+
+  private applyBotDecision(room: Room, bot: Player, decision: BotDecision) {
+    if (!bot.alive) return;
+    if (decision.action === "speak") {
+      if (!canSendChat(bot, room)) return;
+      this.addChatMessage(room, bot, decision.message, chatScopeFor(bot, room));
+      this.emit(room);
+      return;
+    }
+    if (decision.action === "nominateMayor") return this.applyBotMayorNomination(room, bot, decision.targetPlayerId);
+    if (decision.action === "voteMayor") return this.applyBotMayorVote(room, bot, decision.targetPlayerId, decision.reason);
+    if (decision.action === "nominate") return this.applyBotNomination(room, bot, decision.targetPlayerId);
+    if (decision.action === "requestDefense") return this.applyBotDefenseRequest(room, bot, decision.message);
+    if (decision.action === "vote") return this.applyBotVote(room, bot, decision.targetPlayerId, decision.reason);
+    if (decision.action === "nightAction") return this.applyBotNightAction(room, bot, decision);
+  }
+
+  private applyBotMayorNomination(room: Room, bot: Player, targetId: string) {
+    const target = room.players.find((p) => p.id === targetId && p.alive);
+    if (room.phase !== "MAYOR_NOMINATION" || !bot.canVote || !target) return;
+    room.mayorNominations = room.mayorNominations.filter((vote) => vote.voterId !== bot.id).concat({ voterId: bot.id, targetId });
+    this.log(room, "vote", `${bot.name} propose ${target.name} comme candidat Maire.`);
+    this.emit(room);
+  }
+
+  private applyBotMayorVote(room: Room, bot: Player, targetId: string, reason?: string) {
+    const target = room.players.find((p) => p.id === targetId && p.alive);
+    if (room.phase !== "MAYOR_ELECTION" || !bot.canVote || !target || (room.mayorNominees.length && !room.mayorNominees.includes(target.id))) return;
+    room.mayorVotes = room.mayorVotes.filter((vote) => vote.voterId !== bot.id).concat({ voterId: bot.id, targetId });
+    if (reason) this.addChatMessage(room, bot, reason, "public");
+    this.log(room, "vote", `${bot.name} vote pour ${target.name} comme Maire.`);
+    const eligible = room.players.filter((p) => p.alive && p.canVote).length;
+    if (room.mayorVotes.length >= eligible) return this.resolveMayorElection(room);
+    this.emit(room);
+  }
+
+  private applyBotNomination(room: Room, bot: Player, targetId: string) {
+    const target = room.players.find((p) => p.id === targetId && p.alive && p.id !== bot.id);
+    if (room.phase !== "NOMINATION" || !bot.canVote || !target) return;
+    room.nominations = room.nominations.filter((vote) => vote.voterId !== bot.id).concat({ voterId: bot.id, targetId });
+    this.log(room, "vote", `${bot.name} nomine ${target.name}.`);
+    this.emit(room);
+  }
+
+  private applyBotDefenseRequest(room: Room, bot: Player, message?: string) {
+    if (room.phase !== "DEFENSE_REQUESTS" || !room.nominees.includes(bot.id) || room.defenseRequests.some((request) => request.playerId === bot.id)) return;
+    room.defenseRequests.push({ playerId: bot.id, playerName: bot.name, status: "pending", requestedAt: Date.now() });
+    if (message) this.addChatMessage(room, bot, message, "public");
+    this.log(room, "phase", `${bot.name} demande une defense.`);
+    this.emit(room);
+    this.scheduleBotTurns(room);
+  }
+
+  private applyBotVote(room: Room, bot: Player, targetId: string, reason?: string) {
+    const target = room.players.find((p) => p.id === targetId && p.alive && p.id !== bot.id);
+    if (room.phase !== "VOTING" || !bot.canVote || !target) return;
+    if (room.nominees.length && !room.nominees.includes(target.id)) return;
+    if (room.revoteTargets && !room.revoteTargets.includes(target.id)) return;
+    room.votes = room.votes.filter((vote) => vote.voterId !== bot.id).concat({ voterId: bot.id, targetId });
+    if (reason) this.addChatMessage(room, bot, reason, "public");
+    this.log(room, "vote", `${bot.name} vote contre ${target.name}.`);
+    const eligible = room.players.filter((p) => p.alive && p.canVote).length;
+    if (room.votes.length >= eligible) return this.resolveVote(room);
+    this.emit(room);
+  }
+
+  private applyBotNightAction(room: Room, bot: Player, decision: Extract<BotDecision, { action: "nightAction" }>) {
+    const step = room.phase === "NIGHT" ? room.night.steps[room.night.stepIndex] : undefined;
+    const alive = room.players.filter((p) => p.alive);
+    if (!step || !canActFor(bot, room, step)) return;
+    if (step === "hackeuse" && bot.role === "Hackeuse" && decision.targetPlayerId) {
+      const target = alive.find((p) => p.id === decision.targetPlayerId);
+      if (!target?.role) return this.completeStep(room, step);
+      bot.secretInfo.push(`${target.name} est ${ROLE_LABELS[target.role]}.`);
+      return this.completeStep(room, step);
+    }
+    if (step === "avocate" && bot.role === "Avocate") {
+      if (decision.targetPlayerId && alive.some((p) => p.id === decision.targetPlayerId)) room.night.protectedId = decision.targetPlayerId;
+      return this.completeStep(room, step);
+    }
+    if (step === "lanceuse-alerte" && bot.role === "LanceuseAlerte") {
+      if (!room.powers.lanceuseAlerteUsed && decision.targetPlayerId && alive.some((p) => p.id === decision.targetPlayerId)) {
+        room.night.silencedId = decision.targetPlayerId;
+        room.powers.lanceuseAlerteUsed = true;
+      }
+      return this.completeStep(room, step);
+    }
+    if (step === "infiltres" && bot.role === "Infiltre" && decision.targetPlayerId) {
+      const target = alive.find((p) => p.id === decision.targetPlayerId && p.role !== "Infiltre");
+      if (target) {
+        room.night.infiltratorVotes.set(bot.id, target.id);
+        room.night.infiltratorVictimId = infiltratorVoteLeader(room)?.targetId ?? target.id;
+        this.addChatMessage(room, bot, `Je propose ${target.name}.`, "infiltres");
+      }
+      const infiltrators = alive.filter((p) => p.role === "Infiltre").length;
+      if (room.night.infiltratorVotes.size >= Math.max(1, infiltrators)) return this.completeStep(room, step);
+      return this.emit(room);
+    }
+    if (step === "ministre" && bot.role === "Ministre") {
+      if (decision.ministerAction === "save" && !room.powers.ministerSaveUsed) {
+        room.night.ministerSavedVictimId = room.night.infiltratorVictimId;
+        room.powers.ministerSaveUsed = true;
+      } else if (decision.ministerAction === "jail" && !room.powers.ministerJailUsed && decision.targetPlayerId && alive.some((p) => p.id === decision.targetPlayerId && p.id !== bot.id)) {
+        room.night.ministerJailId = decision.targetPlayerId;
+        room.powers.ministerJailUsed = true;
+      }
+      return this.completeStep(room, step);
+    }
+    return this.completeStep(room, step);
+  }
+
+  private addChatMessage(room: Room, player: Player, text: string, scope: ChatMessage["scope"]) {
+    const clean = text.trim().replace(/\s+/g, " ").slice(0, 280);
+    if (!clean) return;
+    room.chatMessages.push({ id: randomId(), at: Date.now(), playerId: player.id, playerName: player.name, text: clean, scope });
+    room.chatMessages = room.chatMessages.slice(-120);
+  }
+
   private silencedText(room: Room) {
     const silenced = room.night.silencedId ? room.players.find((p) => p.id === room.night.silencedId) : undefined;
     return silenced?.alive ? `${silenced.name} ne pourra pas voter aujourd'hui.` : "";
@@ -1158,6 +1432,7 @@ export class GameStore {
 
   private emit(room: Room) {
     this.onChange(room);
+    this.scheduleBotTurns(room);
   }
 
   private reject(socketId: string, message: string) {
@@ -1193,6 +1468,7 @@ export class GameStore {
       round: room.round,
       config: room.config,
       lobby: lobbyInfo(room.players.length, room.config),
+      botAi: { enabled: this.botAi.enabled, maxPerRoom: this.botAi.maxPerRoom, audioEnabled: this.botAi.audioEnabled },
       players: room.players.map((p) => publicPlayer(p, room, activeStep, player)),
       you: player
         ? {
@@ -1236,6 +1512,7 @@ export class GameStore {
       nominationTotals: showsNominations(room.phase) ? voteTotalsFor(room.nominations, room, false) : [],
       nominees: showsNominations(room.phase) ? room.nominees : [],
       defenseRequests: showsNominations(room.phase) ? room.defenseRequests : [],
+      chatMessages: visibleChatMessages(room, player),
       infiltratorVotes: canSeeInfiltratorVotes(player, room, activeStep) ? infiltratorVoteDetails(room) : undefined,
       infiltratorVoteLeader: canSeeInfiltratorVotes(player, room, activeStep) ? infiltratorVoteLeader(room) : undefined,
       lastResult: room.lastResult,
@@ -1269,6 +1546,7 @@ function createPlayer(name: string, socketId: string, sessionId: string, isHost:
     id: randomId(),
     sessionId,
     name: name.trim().slice(0, 32) || "Joueur",
+    isBot: false,
     connected: true,
     alive: true,
     canVote: true,
@@ -1282,11 +1560,30 @@ function createPlayer(name: string, socketId: string, sessionId: string, isHost:
   };
 }
 
+function createBotPlayer(name: string): Player {
+  return {
+    id: randomId(),
+    sessionId: `bot-${randomId()}`,
+    name,
+    isBot: true,
+    connected: true,
+    alive: true,
+    canVote: true,
+    canSpeak: true,
+    muted: false,
+    speaking: false,
+    audioActive: false,
+    isHost: false,
+    secretInfo: []
+  };
+}
+
 function publicPlayer(player: Player, room: Room, activeStep?: NightStep, viewer?: Player): PlayerPublic {
   const neutralizeNightAudio = activeStep === "infiltres" && !canSeeNightAudioState(viewer, player, room);
   return {
     id: player.id,
     name: player.name,
+    isBot: player.isBot,
     connected: player.connected,
     alive: player.alive,
     canVote: player.canVote,
@@ -1305,6 +1602,61 @@ function canActFor(player: Player, room: Room, activeStep?: NightStep) {
   if (!player.alive || room.phase !== "NIGHT" || !activeStep) return false;
   if (activeStep === "infiltres" && (player.role === "Infiltre" || player.role === "LeaderLouange" || player.role === "Guetteuse")) return true;
   return stepRole[activeStep] === player.role;
+}
+
+function botAllowedActions(room: Room, bot: Player, activeStep?: NightStep): BotAllowedAction[] {
+  if (!bot.alive) return ["pass"];
+  if (room.phase === "MAYOR_NOMINATION" && bot.canVote) return ["nominateMayor", "pass"];
+  if (room.phase === "MAYOR_ELECTION" && bot.canVote) return ["voteMayor", "speak", "pass"];
+  if (room.phase === "DEBATE" && bot.canSpeak && !bot.muted) return ["speak", "pass"];
+  if (room.phase === "DEFENSE" && bot.speaking) return ["speak", "pass"];
+  if (room.phase === "NOMINATION" && bot.canVote) return ["nominate", "speak", "pass"];
+  if (room.phase === "DEFENSE_REQUESTS" && room.nominees.includes(bot.id)) return ["requestDefense", "speak", "pass"];
+  if (room.phase === "VOTING" && bot.canVote) return ["vote", "speak", "pass"];
+  if (room.phase === "NIGHT" && activeStep && canActFor(bot, room, activeStep) && !(activeStep === "infiltres" && bot.role === "Guetteuse")) return ["nightAction", "pass"];
+  return ["pass"];
+}
+
+function canSendChat(player: Player, room: Room) {
+  if (!player.alive || !player.canSpeak || player.muted) return false;
+  if (room.phase === "NIGHT") return room.night.steps[room.night.stepIndex] === "infiltres" && player.role === "Infiltre";
+  return ["MAYOR_NOMINATION", "MAYOR_ELECTION", "DAY_ANNOUNCEMENT", "DEBATE", "NOMINATION", "DEFENSE_REQUESTS", "DEFENSE", "VOTING", "RESULT"].includes(room.phase);
+}
+
+function chatScopeFor(player: Player, room: Room): ChatMessage["scope"] {
+  return room.phase === "NIGHT" && room.night.steps[room.night.stepIndex] === "infiltres" && player.role === "Infiltre" ? "infiltres" : "public";
+}
+
+function visibleChatMessages(room: Room, viewer?: Player) {
+  return room.chatMessages.filter((message) => {
+    if (message.scope === "public") return true;
+    return !!viewer?.alive && viewer.role === "Infiltre";
+  });
+}
+
+function botPrivateInfo(room: Room, bot: Player, activeStep?: NightStep) {
+  const info = [...bot.secretInfo];
+  if (bot.role === "Infiltre") info.push(`Infiltres vivants : ${room.players.filter((p) => p.alive && p.role === "Infiltre").map((p) => p.name).join(", ")}.`);
+  if (bot.role === "Ministre" && activeStep === "ministre" && room.night.infiltratorVictimId) {
+    info.push(`Victime designee : ${room.players.find((p) => p.id === room.night.infiltratorVictimId)?.name ?? "inconnue"}.`);
+  }
+  if (bot.role === "Guetteuse" && activeStep === "infiltres") {
+    info.push(`Observation risquee : ${room.players.filter((p) => p.alive && p.role === "Infiltre").map((p) => p.name).join(", ")} agissent cette nuit.`);
+  }
+  return info.slice(-10);
+}
+
+function botVisibleEvents(room: Room, bot: Player) {
+  return room.gameLog
+    .filter((entry) => {
+      if (entry.type === "elimination" || entry.type === "phase") return true;
+      if (entry.type === "vote") return entry.phase !== "NIGHT";
+      if (entry.type === "system") return true;
+      if (entry.phase === "NIGHT" && room.phase === "NIGHT" && room.night.steps[room.night.stepIndex] === "infiltres") return bot.role === "Infiltre" && entry.message.includes("Infiltres");
+      return false;
+    })
+    .slice(-20)
+    .map((entry) => entry.message);
 }
 
 function showsNominations(phase: GamePhase) {
