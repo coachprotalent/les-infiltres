@@ -355,6 +355,27 @@ p {
   background: rgba(20, 55, 31, 0.38);
 }
 
+.role-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.role-card .role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(223, 185, 91, 0.18);
+  color: #f4dfaa;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .role-card span,
 .role-card small,
 .muted,
@@ -427,6 +448,13 @@ p {
 .used-power {
   color: #ffd37a;
   font-weight: 700;
+}
+
+.phase-fallback {
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(242, 240, 231, 0.16);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .sleep-screen {
@@ -564,6 +592,80 @@ p {
   border-bottom: 1px solid rgba(242, 240, 231, 0.12);
 }
 
+.bot-controls,
+.chat-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(242, 240, 231, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.chat-panel {
+  margin-top: 16px;
+}
+
+.chat-log {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.chat-log p {
+  margin: 0;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.chat-log span {
+  color: #dfb95b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.chat-log .private-message {
+  border: 1px solid rgba(223, 185, 91, 0.28);
+}
+
+.chat-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.phase-intro {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px;
+  margin-bottom: 16px;
+  border: 1px solid rgba(223, 185, 91, 0.28);
+  border-radius: 8px;
+  background: rgba(223, 185, 91, 0.1);
+}
+
+.phase-intro h2 {
+  margin-bottom: 6px;
+  font-size: 18px;
+}
+
+.phase-intro p,
+.phase-reminder {
+  margin: 0;
+  color: #d8d0bf;
+}
+
+.phase-reminder {
+  padding: 8px 0 14px;
+  font-size: 14px;
+}
+
 .players {
   display: grid;
   gap: 10px;
@@ -630,6 +732,22 @@ p {
   gap: 6px;
 }
 
+.mayor-defense-requests {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.mayor-defense-requests span,
+.defense-request-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .adminbar {
   margin-top: 10px;
   padding: 10px 12px;
@@ -667,6 +785,39 @@ p {
 .game-log span {
   color: #dfb95b;
   font-weight: 800;
+}
+
+.vote-ledger {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(242, 240, 231, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.vote-ledger h3,
+.vote-ledger p {
+  margin: 0;
+}
+
+.private-ledger {
+  border-color: rgba(95, 149, 105, 0.35);
+  background: rgba(20, 55, 31, 0.3);
+}
+
+.vote-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: #f4dfaa;
+}
+
+.vote-totals span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(223, 185, 91, 0.13);
 }
 
 .admin-page {

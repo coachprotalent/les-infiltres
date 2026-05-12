@@ -20,10 +20,13 @@ export type AudioMode = "integrated" | "external";
 export type GamePhase =
   | "LOBBY"
   | "ROLE_DISTRIBUTION"
+  | "MAYOR_NOMINATION"
   | "MAYOR_ELECTION"
   | "NIGHT"
   | "DAY_ANNOUNCEMENT"
   | "DEBATE"
+  | "NOMINATION"
+  | "DEFENSE_REQUESTS"
   | "DEFENSE"
   | "VOTING"
   | "RESULT"
@@ -34,8 +37,11 @@ export type TieRule = "none" | "revote";
 export type Winner = "Croyants" | "Infiltres";
 
 export type PhaseDurations = {
-  night: number;
+  mayorElection: number;
+  nightAction: number;
+  transitionNight: number;
   freeDebate: number;
+  nomination: number;
   defense: number;
   vote: number;
   resultReveal: number;
@@ -61,6 +67,7 @@ export type PowerStatus = {
 export type PlayerPublic = {
   id: string;
   name: string;
+  isBot: boolean;
   connected: boolean;
   alive: boolean;
   canVote: boolean;
@@ -77,6 +84,45 @@ export type PlayerPublic = {
 export type VoteRecord = {
   voterId: string;
   targetId: string;
+};
+
+export type ChatMessage = {
+  id: string;
+  at: number;
+  playerId: string;
+  playerName: string;
+  text: string;
+  scope: "public" | "infiltres";
+};
+
+export type VoteViewRecord = VoteRecord & {
+  voterName: string;
+  targetName: string;
+  weight: number;
+  mayorBonus: boolean;
+  sageBonus: boolean;
+};
+
+export type VoteTotal = {
+  targetId: string;
+  targetName: string;
+  total: number;
+};
+
+export type DefenseRequestStatus = "pending" | "granted" | "refused" | "done";
+
+export type DefenseRequest = {
+  playerId: string;
+  playerName: string;
+  status: DefenseRequestStatus;
+  requestedAt: number;
+};
+
+export type InfiltratorVoteView = {
+  voterId: string;
+  voterName: string;
+  targetId: string;
+  targetName: string;
 };
 
 export type LobbyInfo = {
@@ -105,6 +151,11 @@ export type RoomView = {
   round: number;
   config: GameConfig;
   lobby: LobbyInfo;
+  botAi: {
+    enabled: boolean;
+    maxPerRoom: number;
+    audioEnabled: boolean;
+  };
   players: PlayerPublic[];
   you?: {
     id: string;
@@ -121,6 +172,7 @@ export type RoomView = {
     powerStatuses: PowerStatus[];
     nightChannel?: "infiltres" | "solo" | "sleep";
     canHearAudio: boolean;
+    audioPeerIds: string[];
   };
   narrator: string;
   transition?: "night-falls" | "day-rises";
@@ -131,7 +183,23 @@ export type RoomView = {
   timerDuration?: number;
   timerEndsAt?: number;
   votes: VoteRecord[];
+  voteDetails: VoteViewRecord[];
+  voteTotals: VoteTotal[];
   mayorVotes: VoteRecord[];
+  mayorVoteDetails: VoteViewRecord[];
+  mayorVoteTotals: VoteTotal[];
+  mayorNominations: VoteRecord[];
+  mayorNominationDetails: VoteViewRecord[];
+  mayorNominationTotals: VoteTotal[];
+  mayorNominees: string[];
+  nominations: VoteRecord[];
+  nominationDetails: VoteViewRecord[];
+  nominationTotals: VoteTotal[];
+  nominees: string[];
+  defenseRequests: DefenseRequest[];
+  chatMessages: ChatMessage[];
+  infiltratorVotes?: InfiltratorVoteView[];
+  infiltratorVoteLeader?: VoteTotal;
   lastResult?: string;
   winner?: Winner;
   roleOptions?: Role[];
@@ -152,7 +220,7 @@ export type AdminRoomSummary = {
 };
 
 export type AdminRoomDetails = AdminRoomSummary & {
-  players: Pick<PlayerPublic, "id" | "name" | "connected" | "alive" | "isHost" | "isMayor">[];
+  players: Pick<PlayerPublic, "id" | "name" | "isBot" | "connected" | "alive" | "isHost" | "isMayor">[];
   round: number;
 };
 
@@ -174,16 +242,26 @@ export type ClientToServerEvents = {
   closeRoom: (payload: { code: string }) => void;
   leaveRoom: (payload: { code: string }) => void;
   startGame: (payload: { code: string }) => void;
+  addBot: (payload: { code: string }) => void;
+  addBots: (payload: { code: string; count: number }) => void;
+  fillWithBots: (payload: { code: string; targetCount: number }) => void;
+  nominateMayor: (payload: { code: string; targetId: string }) => void;
   electMayor: (payload: { code: string; targetId: string }) => void;
   adminNext: (payload: { code: string }) => void;
   endGame: (payload: { code: string }) => void;
   returnToLobby: (payload: { code: string }) => void;
   nightAction: (payload: { code: string; targetId?: string; roleChoice?: Role; ministerAction?: "save" | "jail" }) => void;
+  finishNightStep: (payload: { code: string }) => void;
   startDebate: (payload: { code: string; seconds?: number }) => void;
   grantSpeech: (payload: { code: string; playerId: string; seconds?: number }) => void;
   stopSpeech: (payload: { code: string }) => void;
+  closeDebate: (payload: { code: string }) => void;
+  nominate: (payload: { code: string; targetId: string }) => void;
+  requestDefense: (payload: { code: string }) => void;
+  denyDefense: (payload: { code: string; playerId: string }) => void;
   startVote: (payload: { code: string; seconds?: number }) => void;
   vote: (payload: { code: string; targetId: string }) => void;
+  sendChat: (payload: { code: string; text: string }) => void;
   setMuted: (payload: { code: string; playerId: string; muted: boolean }) => void;
   audioActivity: (payload: { code: string; speaking: boolean }) => void;
   rtcSignal: (payload: { code: string; to: string; signal: unknown }) => void;
@@ -197,8 +275,11 @@ export type ServerToClientEvents = {
 };
 
 export const DEFAULT_DURATIONS: PhaseDurations = {
-  night: 180,
+  mayorElection: 60,
+  nightAction: 10,
+  transitionNight: 5,
   freeDebate: 180,
+  nomination: 60,
   defense: 45,
   vote: 60,
   resultReveal: 20
@@ -297,6 +378,7 @@ export function getInfiltratorCount(playerCount: number) {
 
 export function mergeConfig(config?: Partial<GameConfig>): GameConfig {
   const enabledRoles = config?.enabledRoles?.filter((role) => ROLES.includes(role)) ?? DEFAULT_CONFIG.enabledRoles;
+  const legacyDurations = config?.durations as Partial<PhaseDurations> & { night?: number } | undefined;
   return {
     maxPlayers: clampInt(config?.maxPlayers, MIN_PLAYERS, MAX_PLAYERS, DEFAULT_CONFIG.maxPlayers),
     tieRule: config?.tieRule === "revote" ? "revote" : "none",
@@ -304,8 +386,11 @@ export function mergeConfig(config?: Partial<GameConfig>): GameConfig {
     requireSpecialRoles: config?.requireSpecialRoles ?? DEFAULT_CONFIG.requireSpecialRoles,
     enabledRoles: Array.from(new Set(["Infiltre" as Role, ...enabledRoles])),
     durations: {
-      night: clampInt(config?.durations?.night, 15, 1800, DEFAULT_DURATIONS.night),
+      mayorElection: clampInt(config?.durations?.mayorElection, 10, 600, DEFAULT_DURATIONS.mayorElection),
+      nightAction: clampInt(config?.durations?.nightAction ?? legacyDurations?.night, 5, 60, DEFAULT_DURATIONS.nightAction),
+      transitionNight: clampInt(config?.durations?.transitionNight, 0, 120, DEFAULT_DURATIONS.transitionNight),
       freeDebate: clampInt(config?.durations?.freeDebate, 15, 3600, DEFAULT_DURATIONS.freeDebate),
+      nomination: clampInt(config?.durations?.nomination, 10, 600, DEFAULT_DURATIONS.nomination),
       defense: clampInt(config?.durations?.defense, 10, 600, DEFAULT_DURATIONS.defense),
       vote: clampInt(config?.durations?.vote, 10, 600, DEFAULT_DURATIONS.vote),
       resultReveal: clampInt(config?.durations?.resultReveal, 5, 300, DEFAULT_DURATIONS.resultReveal)

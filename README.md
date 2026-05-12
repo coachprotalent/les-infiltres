@@ -15,6 +15,7 @@ Application web multijoueur temps réel inspirée du jeu Les Infiltrés, avec lo
 - Journal de partie visible par l'hôte et en fin de partie.
 - Narrateur automatique côté navigateur.
 - Audio externe ou audio intégré optionnel.
+- Bots IA jouables côté serveur avec contexte filtré et actions validées.
 - WebSocket Socket.IO pour l'état temps réel.
 
 ## Prérequis
@@ -52,7 +53,7 @@ PUBLIC_URL=http://localhost:3000
 CORS_ORIGIN=http://localhost:5173
 CLIENT_URL=http://localhost:5173
 ADMIN_USERNAME=aubinaso
-ADMIN_PASSWORD=ep*/-tata
+ADMIN_PASSWORD=change-me
 ```
 
 ## Lancement en développement
@@ -92,27 +93,147 @@ Par défaut, l'application écoute sur `HOST=0.0.0.0` et `PORT=3000`.
 
 ## Variables d'environnement
 
-Variables lues par le backend :
+Toutes les variables sont lues par le backend au démarrage. Après modification de `.env` sous PM2, redémarrez avec `pm2 restart les-infiltres-dev --update-env`.
 
 ```env
-PORT=3000
+# Port backend Node.js utilise par Express et Socket.IO.
+PORT=3020
+
+# Adresse d'ecoute du backend.
 HOST=0.0.0.0
-NODE_ENV=production
-PUBLIC_URL=https://infiltre.traillearn.org
-CORS_ORIGIN=https://infiltre.traillearn.org
-CLIENT_URL=http://localhost:5173
+
+# Mode environnement.
+NODE_ENV=development
+
+# URL publique utilisee cote frontend.
+PUBLIC_URL=https://infiltre-dev.traillearn.org
+
+# Domaine autorise pour CORS.
+CORS_ORIGIN=https://infiltre-dev.traillearn.org
+
+# URL frontend utilisee par le client.
+CLIENT_URL=https://infiltre-dev.traillearn.org
+
+# Identifiants interface admin.
+ADMIN_USERNAME=aubinaso
+ADMIN_PASSWORD=change-me
+
+# Endpoint Azure OpenAI de la ressource realtime.
+AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
+
+# Cle API Azure OpenAI cote serveur.
+AZURE_OPENAI_API_KEY=
+
+# Version API Azure OpenAI utilisee.
+AZURE_OPENAI_API_VERSION=2024-10-01-preview
+
+# Nom exact du deploiement realtime Azure.
+AZURE_OPENAI_REALTIME_DEPLOYMENT=gpt-realtime-1.5
+
+# Active les bots IA.
+BOT_AI_ENABLED=true
+
+# Nombre maximum de bots par salon.
+BOT_MAX_PER_ROOM=6
+
+# Niveau de participation: discreet | normal | talkative.
+BOT_DEFAULT_PARTICIPATION=normal
+
+# Active les voix audio IA des bots. false = texte uniquement.
+BOT_AUDIO_ENABLED=false
 ```
 
-- `PORT` : port HTTP du serveur Express et Socket.IO.
-- `HOST` : interface d'écoute du serveur.
-- `NODE_ENV` : environnement Node.js.
-- `PUBLIC_URL` : URL publique de production.
-- `CORS_ORIGIN` : origine autorisée par CORS.
-- `CLIENT_URL` : origine Vite en développement, utilisée seulement si `CORS_ORIGIN` n'est pas définie.
-- `ADMIN_USERNAME` : identifiant de connexion à l'interface administrateur.
-- `ADMIN_PASSWORD` : mot de passe administrateur.
+| Variable | Obligatoire | Rôle | Exemple | Comportement attendu |
+| --- | --- | --- | --- | --- |
+| `PORT` | Oui | Port HTTP du serveur Express et Socket.IO. | `3020` | Nginx ou le navigateur doit pointer vers ce port si le backend est exposé directement. |
+| `HOST` | Oui | Adresse d'écoute du serveur. | `0.0.0.0` ou `127.0.0.1` | Utilisez `127.0.0.1` derrière Nginx, `0.0.0.0` si Node écoute sur le réseau. |
+| `NODE_ENV` | Oui | Mode Node.js. | `production` | Influence certains comportements de dépendances Node. |
+| `PUBLIC_URL` | Oui | URL publique de l'application. | `https://infiltre-dev.traillearn.org` | Sert d'origine par défaut si `CORS_ORIGIN` n'est pas défini. |
+| `CORS_ORIGIN` | Oui | Origine autorisée par CORS. | `https://infiltre-dev.traillearn.org` | Doit correspondre à l'origine navigateur réelle. |
+| `CLIENT_URL` | Optionnel | Fallback frontend si `CORS_ORIGIN` manque. | `http://localhost:5173` | Utile surtout en développement local. |
+| `ADMIN_USERNAME` | Oui | Identifiant admin. | `aubinaso` | Requis pour accéder au dashboard admin. |
+| `ADMIN_PASSWORD` | Oui | Mot de passe admin. | `change-me` | À remplacer avant tout déploiement public. |
+| `AZURE_OPENAI_ENDPOINT` | Oui pour bots IA | Endpoint de la ressource Azure OpenAI qui contient le déploiement realtime. | `https://my-resource.openai.azure.com/` | Le backend construit l'URL realtime à partir de cet endpoint. |
+| `AZURE_OPENAI_API_KEY` | Oui pour bots IA | Clé API Azure OpenAI. | vide dans l'exemple | Reste uniquement côté serveur. Ne jamais l'exposer au frontend. |
+| `AZURE_OPENAI_API_VERSION` | Oui pour endpoint preview | Version API realtime Azure. | `2024-10-01-preview` | Le service essaie le format realtime preview et le format GA si nécessaire. |
+| `AZURE_OPENAI_REALTIME_DEPLOYMENT` | Oui pour bots IA | Nom exact du déploiement realtime utilisé par les bots. | `gpt-realtime-1.5` | C'est le modèle principal des bots. `AZURE_OPENAI_DEPLOYMENT` n'est pas utilisé pour eux. |
+| `BOT_AI_ENABLED` | Oui | Active ou désactive les bots IA. | `true` | Si `false` ou si Azure manque, les contrôles IA sont désactivés. |
+| `BOT_MAX_PER_ROOM` | Oui | Limite de bots par salon. | `6` | Empêche de remplir une partie avec trop de bots. |
+| `BOT_DEFAULT_PARTICIPATION` | Optionnel | Niveau de prise de parole. | `normal` | Valeurs: `discreet`, `normal`, `talkative`. |
+| `BOT_AUDIO_ENABLED` | Oui | Active la future voix IA. | `false` | `false` garde les bots actifs en texte: chat, nominations, votes et actions de nuit. |
+| `BOT_AI_TIMEOUT_MS` | Optionnel | Timeout d'une décision Azure. | `12000` | Si Azure ne répond pas, le bot passe son tour et la partie continue. |
 
 Le frontend n'utilise pas de variable Vite actuellement. En production, il se connecte au backend par la même origine que la page servie.
+
+## Bots IA
+
+Les bots IA sont des joueurs serveur. Ils comptent dans le nombre de joueurs, reçoivent un rôle normal, peuvent être nommés, voter, être élus Maire, agir la nuit et écrire dans le chat visible. Ils ne disposent pas de socket navigateur et toutes leurs actions sont validées par le moteur de jeu avant application.
+
+Le service dédié est `BotRealtimeAIService`. Il centralise la communication Azure OpenAI realtime, la génération des messages et actions JSON, les logs Azure, le filtrage anti-triche du contexte, et gardera l'intégration audio temps réel future.
+
+`AZURE_OPENAI_REALTIME_DEPLOYMENT=gpt-realtime-1.5` est le déploiement principal utilisé par les bots. Ne configurez pas `AZURE_OPENAI_DEPLOYMENT=botintelligence` pour les bots si ce déploiement n'existe pas ou n'est pas réellement utilisé.
+
+Même avec `BOT_AUDIO_ENABLED=false`, les bots fonctionnent normalement en texte : ils parlent dans le chat, participent aux débats, nominent, votent, agissent la nuit, reçoivent leur rôle et peuvent devenir Maire.
+
+Contexte envoyé au modèle :
+
+```json
+{
+  "botName": "Bot Naomi",
+  "botRole": "Infiltre",
+  "phase": "DEBATE",
+  "publicEvents": [],
+  "visibleMessages": [],
+  "alivePlayers": [],
+  "nominatedPlayers": [],
+  "currentVoteState": { "votes": [], "totals": [] },
+  "privateRoleInfo": [],
+  "allowedActions": ["speak", "pass"]
+}
+```
+
+Sécurité anti-triche :
+
+- La clé Azure reste uniquement dans le backend.
+- Le frontend ne reçoit jamais la clé, ni le prompt système.
+- Le service `BotRealtimeAIService` ne reçoit jamais l'objet room complet.
+- Le contexte envoyé au modèle est limité à `botName`, `botRole`, `phase`, `publicEvents`, `visibleMessages`, `alivePlayers`, `nominatedPlayers`, `currentVoteState`, `privateRoleInfo` et `allowedActions`.
+- Les rôles secrets des autres joueurs, l'état complet de la room, les actions privées invisibles et les votes cachés non autorisés ne sont pas envoyés.
+- Le modèle retourne uniquement une action JSON structurée (`speak`, `vote`, `nominate`, `nightAction`, etc.).
+- Le serveur revalide la phase, la cible, les permissions, l'état du joueur et les règles anti-triche avant d'appliquer l'action.
+
+Exemples d'actions JSON attendues :
+
+```json
+{ "action": "speak", "message": "Je pense que ce comportement est etrange." }
+```
+
+```json
+{ "action": "vote", "targetPlayerId": "player_123", "reason": "Il est tres suspect." }
+```
+
+```json
+{ "action": "nominate", "targetPlayerId": "player_456" }
+```
+
+Logs attendus :
+
+```text
+[BotAI] enabled=true audio=false deployment=gpt-realtime-1.5
+[BotAI] endpoint=present apiKey=present apiVersion=2024-10-01-preview
+[BotAI] Bot Naomi phase=DEBATE called deployment=gpt-realtime-1.5
+[BotAI] Bot Naomi phase=DEBATE action=speak accepted
+[BotAI] Azure error: ...
+```
+
+## Sécurité
+
+- Ne jamais commiter `.env`.
+- Ne jamais exposer `AZURE_OPENAI_API_KEY` dans le frontend, les logs, une capture d'écran ou une discussion publique.
+- Régénérer immédiatement la clé Azure si elle a été affichée dans un terminal, un log, une capture ou un commit.
+- Toutes les requêtes Azure OpenAI passent uniquement par le backend.
+- Le navigateur ne doit recevoir ni clé Azure, ni endpoint interne privé, ni prompt système.
+- Utiliser HTTPS en production pour protéger les sessions admin, Socket.IO et les échanges de jeu.
 
 ## Administration
 
@@ -122,10 +243,10 @@ Les identifiants ne doivent jamais être codés en dur dans le code source. Conf
 
 ```env
 ADMIN_USERNAME=aubinaso
-ADMIN_PASSWORD=ep*/-tata
+ADMIN_PASSWORD=change-me
 ```
 
-Sur un serveur, modifiez ces valeurs avant le lancement et gardez le fichier `.env` hors de Git. Après changement des identifiants, redémarrez l'application (`pm2 restart les-infiltres` en production PM2).
+Sur un serveur, modifiez ces valeurs avant le lancement et gardez le fichier `.env` hors de Git. Après changement des identifiants, redémarrez l'application (`pm2 restart les-infiltres-dev --update-env` en production PM2).
 
 Après connexion, le dashboard admin affiche :
 
@@ -190,18 +311,18 @@ Lance le serveur Node.js compilé.
 
 Il n'y a pas encore de script `lint` configuré. Ajoutez ESLint avant d'utiliser `npm run lint`.
 
-## Déploiement sur Ubuntu
+## Déploiement Ubuntu
 
-Ces étapes ciblent Ubuntu 22.04 ou 24.04.
+Ces étapes ciblent Ubuntu 22.04 ou 24.04 avec Node.js 20+, PM2, Nginx et Certbot. Les exemples utilisent `les-infiltres-dev`, `PORT=3020` et `infiltre-dev.traillearn.org`; adaptez les noms à votre environnement.
 
-### A. Installer les dépendances système
+### 1. Installer les dépendances système
 
 ```bash
 sudo apt update
 sudo apt install -y git curl build-essential nginx
 ```
 
-### B. Installer Node.js avec nvm
+### 2. Installer Node.js et npm
 
 ```bash
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
@@ -212,105 +333,69 @@ node -v
 npm -v
 ```
 
-### C. Cloner le repo
+Le projet demande Node.js 20 ou plus récent et npm 10 ou plus récent.
+
+### 3. Cloner, installer et builder
 
 ```bash
 git clone https://github.com/<user>/les-infiltres.git
 cd les-infiltres
-```
-
-### D. Installer les dépendances
-
-```bash
 npm install
-```
-
-### E. Créer le fichier `.env`
-
-```bash
 cp .env.example .env
 nano .env
-```
-
-Exemple production pour `infiltre.traillearn.org` :
-
-```env
-PORT=3000
-HOST=127.0.0.1
-NODE_ENV=production
-PUBLIC_URL=https://infiltre.traillearn.org
-CORS_ORIGIN=https://infiltre.traillearn.org
-CLIENT_URL=http://localhost:5173
-ADMIN_USERNAME=aubinaso
-ADMIN_PASSWORD=ep*/-tata
-```
-
-`HOST=127.0.0.1` est recommandé derrière Nginx. Utilisez `HOST=0.0.0.0` seulement si le serveur Node doit écouter directement sur le réseau.
-
-### F. Build
-
-```bash
 npm run build
 ```
 
-### G. Lancer en production
+Dans `.env`, renseignez au minimum `PORT`, `HOST`, `PUBLIC_URL`, `CORS_ORIGIN`, les identifiants admin, puis les variables Azure OpenAI si les bots IA doivent être activés. Derrière Nginx, utilisez généralement `HOST=127.0.0.1`.
+
+### 4. Lancer avec PM2
 
 ```bash
-npm start
+sudo npm install -g pm2
+pm2 start npm --name les-infiltres-dev -- start
+pm2 save
+pm2 startup
 ```
 
 Vérifier le backend :
 
 ```bash
-curl http://127.0.0.1:3000/health
-```
-
-## Déploiement avec PM2
-
-Installer PM2 :
-
-```bash
-npm install -g pm2
-```
-
-Lancer l'application :
-
-```bash
-pm2 start npm --name les-infiltres -- start
-```
-
-Sauvegarder la configuration PM2 :
-
-```bash
-pm2 save
-pm2 startup
-```
-
-Commandes utiles :
-
-```bash
-pm2 logs les-infiltres
+curl http://127.0.0.1:3020/health
 pm2 status
-pm2 restart les-infiltres
-pm2 stop les-infiltres
+pm2 logs les-infiltres-dev
 ```
 
-## Configuration Nginx reverse proxy
+Quand vous modifiez `.env`, redémarrez toujours avec les nouvelles variables :
+
+```bash
+pm2 restart les-infiltres-dev --update-env
+```
+
+Commandes PM2 utiles :
+
+```bash
+pm2 logs les-infiltres-dev
+pm2 restart les-infiltres-dev --update-env
+pm2 stop les-infiltres-dev
+pm2 delete les-infiltres-dev
+```
+
+### 5. Configurer Nginx
 
 Créer la configuration :
 
 ```bash
-sudo nano /etc/nginx/sites-available/les-infiltres
+sudo nano /etc/nginx/sites-available/les-infiltres-dev
 ```
 
 Contenu recommandé :
 
 ```nginx
 server {
-    server_name infiltre.traillearn.org;
+    server_name infiltre-dev.traillearn.org;
 
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:3020;
         proxy_http_version 1.1;
 
         proxy_set_header Upgrade $http_upgrade;
@@ -329,32 +414,68 @@ server {
 Activer le site :
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/les-infiltres /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/les-infiltres-dev /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
 Cette configuration supporte Socket.IO grâce aux en-têtes `Upgrade` et `Connection`.
 
-## Configuration HTTPS avec Certbot
-
-Installer Certbot :
+### 6. Activer HTTPS avec Certbot
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-```
-
-Créer le certificat :
-
-```bash
-sudo certbot --nginx -d infiltre.traillearn.org
-```
-
-Tester le renouvellement :
-
-```bash
+sudo certbot --nginx -d infiltre-dev.traillearn.org
 sudo certbot renew --dry-run
 ```
+
+### 7. Mise à jour d'un déploiement
+
+```bash
+cd les-infiltres
+git pull
+npm install
+npm run build
+pm2 restart les-infiltres-dev --update-env
+pm2 logs les-infiltres-dev
+```
+
+### 8. Troubleshooting
+
+Port déjà utilisé :
+
+```bash
+sudo lsof -i :3020
+```
+
+Logs backend :
+
+```bash
+pm2 logs les-infiltres-dev
+```
+
+Vérifier Nginx :
+
+```bash
+sudo nginx -t
+sudo systemctl status nginx
+sudo journalctl -u nginx -f
+```
+
+Erreur CORS :
+
+```env
+PUBLIC_URL=https://infiltre-dev.traillearn.org
+CORS_ORIGIN=https://infiltre-dev.traillearn.org
+```
+
+Erreur Azure ou bots absents :
+
+```bash
+pm2 logs les-infiltres-dev
+```
+
+Les logs doivent afficher `enabled=true`, `deployment=gpt-realtime-1.5`, `endpoint=present` et `apiKey=present`. Si `.env` vient d'être modifié, relancez `pm2 restart les-infiltres-dev --update-env`.
 
 ## Firewall
 
@@ -365,7 +486,7 @@ sudo ufw enable
 sudo ufw status
 ```
 
-N'exposez pas le port `3000` publiquement si Nginx sert de reverse proxy.
+N'exposez pas le port `3020` publiquement si Nginx sert de reverse proxy.
 
 ## Mise à jour du projet
 
@@ -374,14 +495,14 @@ cd les-infiltres
 git pull
 npm install
 npm run build
-pm2 restart les-infiltres
+pm2 restart les-infiltres-dev --update-env
 ```
 
 Après une mise à jour importante :
 
 ```bash
-pm2 logs les-infiltres
-curl http://127.0.0.1:3000/health
+pm2 logs les-infiltres-dev
+curl http://127.0.0.1:3020/health
 ```
 
 ## Dépannage
@@ -389,7 +510,7 @@ curl http://127.0.0.1:3000/health
 ### Port déjà utilisé
 
 ```bash
-lsof -i :3000
+lsof -i :3020
 ```
 
 Arrêter le processus concerné ou changer `PORT` dans `.env`.
@@ -441,14 +562,14 @@ sudo systemctl reload nginx
 Vérifier `.env` :
 
 ```env
-CORS_ORIGIN=https://infiltre.traillearn.org
-PUBLIC_URL=https://infiltre.traillearn.org
+CORS_ORIGIN=https://infiltre-dev.traillearn.org
+PUBLIC_URL=https://infiltre-dev.traillearn.org
 ```
 
 Redémarrer ensuite l'application :
 
 ```bash
-pm2 restart les-infiltres
+pm2 restart les-infiltres-dev --update-env
 ```
 
 ### Site inaccessible
@@ -457,7 +578,7 @@ Vérifier :
 
 ```bash
 pm2 status
-pm2 logs les-infiltres
+pm2 logs les-infiltres-dev
 sudo systemctl status nginx
 sudo journalctl -u nginx -f
 sudo nginx -t
@@ -473,11 +594,11 @@ sudo certbot renew --dry-run
 ### Logs
 
 ```bash
-pm2 logs les-infiltres
+pm2 logs les-infiltres-dev
 sudo journalctl -u nginx -f
 sudo nginx -t
 sudo systemctl status nginx
-lsof -i :3000
+lsof -i :3020
 ```
 
 ## Roadmap
