@@ -30,7 +30,7 @@ app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, name: "les-infiltres" });
+  res.json({ ok: true, name: "les-infiltres", botAi: store.botSettings().botAi });
 });
 
 const publicDir = path.resolve(__dirname, "../../frontend/dist");
@@ -90,8 +90,12 @@ io.on("connection", (socket) => {
     ack({ ok: true });
   });
 
+  socket.on("getServerSettings", (ack) => {
+    ack(store.botSettings());
+  });
+
   socket.on("createRoom", (payload, ack) => {
-    ack(store.createRoom(payload.name, payload.audioMode, socket.id, payload.sessionId, payload.config));
+    ack(store.createRoom(payload.name, payload.audioMode, socket.id, payload.sessionId, payload.config, payload.botConfig));
   });
 
   socket.on("joinRoom", (payload, ack) => {
@@ -103,6 +107,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("updateConfig", ({ code, config }) => store.updateConfig(code, socket.id, config));
+  socket.on("updateBotConfig", ({ code, botConfig }) => store.updateBotConfig(code, socket.id, botConfig));
   socket.on("updateAudioMode", ({ code, audioMode }) => store.updateAudioMode(code, socket.id, audioMode));
   socket.on("closeRoom", ({ code }) => store.closeRoom(code, socket.id));
   socket.on("leaveRoom", ({ code }) => store.leaveRoom(code, socket.id));

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import type { AdminRoomDetails, AdminRoomSummary, AudioMode, ChatMessage, DefenseRequest, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
-import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, mergeConfig } from "@les-infiltres/shared";
+import type { AdminRoomDetails, AdminRoomSummary, AudioMode, BotRoomConfig, ChatMessage, DefenseRequest, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, ServerSettings, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
+import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, mergeBotConfig, mergeConfig } from "@les-infiltres/shared";
 import { BotRealtimeAIService, type BotAIContext, type BotAllowedAction, type BotDecision } from "./botRealtimeAI.js";
 import { NarrationService } from "./narration.js";
 
@@ -48,6 +48,7 @@ type Room = {
   createdAt: number;
   mayorId?: string;
   audioMode: AudioMode;
+  botConfig: BotRoomConfig;
   phase: GamePhase;
   round: number;
   config: GameConfig;
@@ -75,7 +76,22 @@ type Room = {
   nominees: string[];
   defenseRequests: DefenseRequest[];
   chatMessages: ChatMessage[];
+  botThinkingIds: Set<string>;
+  botBrains: Map<string, BotBrain>;
   botActionKeys: Set<string>;
+};
+
+type BotBrain = {
+  botId: string;
+  botName: string;
+  personality: string;
+  speakingStyle: string;
+  suspicionMap: Map<string, number>;
+  memory: string[];
+  lastMessagesSeen: string[];
+  privateKnowledge: string[];
+  currentStrategy: string;
+  recentMessages: string[];
 };
 
 const NIGHT_STEPS_FIRST: NightStep[] = ["agent-double", "hackeuse", "avocate", "lanceuse-alerte", "infiltres", "ministre"];
@@ -92,6 +108,38 @@ const stepRole: Partial<Record<NightStep, Role>> = {
 
 const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const BOT_NAMES = ["Bot Elias", "Bot Naomi", "Bot Caleb", "Bot Myriam", "Bot Samuel", "Bot Esther", "Bot Ruth", "Bot Jonas", "Bot Sarah", "Bot Daniel"];
+const BOT_PROFILES: Record<string, Omit<BotBrain, "botId" | "botName" | "suspicionMap" | "memory" | "lastMessagesSeen" | "privateKnowledge" | "recentMessages">> = {
+  "Bot Myriam": {
+    personality: "calme, analytique, prudente",
+    speakingStyle: "phrases posees, nuancees, avec une hypothese claire",
+    currentStrategy: "observer les contradictions avant d'accuser"
+  },
+  "Bot Elias": {
+    personality: "direct, observateur, suspicieux",
+    speakingStyle: "court, frontal, avec des accusations nettes",
+    currentStrategy: "mettre la pression sur les joueurs evasifs"
+  },
+  "Bot Naomi": {
+    personality: "intuitive, sociale, attentive aux contradictions",
+    speakingStyle: "naturel, relationnel, cite les incoherences du debat",
+    currentStrategy: "croiser les reactions sociales et les votes"
+  },
+  "Bot Caleb": {
+    personality: "strategique, discret, precis",
+    speakingStyle: "parle peu, mais cible une raison concrete",
+    currentStrategy: "economiser ses interventions et peser au vote"
+  },
+  "Bot Samuel": {
+    personality: "diplomate, calme, moderateur",
+    speakingStyle: "apaise le debat tout en posant une question utile",
+    currentStrategy: "faire parler les autres pour reveler les incoherences"
+  }
+};
+const BOT_PROFILE_FALLBACKS = [
+  { personality: "methodique, prudent, factuel", speakingStyle: "liste un indice et une conclusion simple", currentStrategy: "suivre les votes publics" },
+  { personality: "social, curieux, peu agressif", speakingStyle: "pose des questions courtes", currentStrategy: "faire clarifier les silences" },
+  { personality: "mefiant, rapide, competitif", speakingStyle: "phrases breves avec un soupcon explicite", currentStrategy: "tester les defenses faibles" }
+] satisfies Array<Pick<BotBrain, "personality" | "speakingStyle" | "currentStrategy">>;
 
 export class GameStore {
   private rooms = new Map<string, Room>();
@@ -112,14 +160,29 @@ export class GameStore {
     this.onClose = onClose;
   }
 
-  createRoom(name: string, audioMode: AudioMode, socketId: string, sessionId = randomId(), config?: Partial<GameConfig>): RoomView {
+  botSettings(): ServerSettings {
+    return {
+      botAi: {
+        enabled: this.botAi.enabled,
+        maxPerRoom: this.botAi.maxPerRoom,
+        audioEnabled: this.botAi.audioEnabled,
+        defaults: this.botAi.defaults
+      }
+    };
+  }
+
+  createRoom(name: string, audioMode: AudioMode, socketId: string, sessionId = randomId(), config?: Partial<GameConfig>, botConfig?: Partial<BotRoomConfig>): RoomView {
     const code = this.createCode();
     const host = createPlayer(name, socketId, sessionId, true);
+    const resolvedBotConfig = mergeBotConfig(botConfig, this.botAi.defaults);
+    resolvedBotConfig.enabled = this.botAi.enabled && resolvedBotConfig.enabled;
+    resolvedBotConfig.count = Math.min(resolvedBotConfig.count, this.botAi.maxPerRoom);
     const room: Room = {
       code,
       hostId: host.id,
       createdAt: Date.now(),
       audioMode,
+      botConfig: resolvedBotConfig,
       phase: "LOBBY",
       round: 0,
       config: mergeConfig(config),
@@ -134,6 +197,8 @@ export class GameStore {
       nominees: [],
       defenseRequests: [],
       chatMessages: [],
+      botThinkingIds: new Set(),
+      botBrains: new Map(),
       botActionKeys: new Set(),
       narrator: "Salle creee. En attente des joueurs.",
       powers: emptyPowers(),
@@ -142,6 +207,7 @@ export class GameStore {
     };
     this.log(room, "system", "Salle creee.");
     this.rooms.set(code, room);
+    this.applyInitialBotConfig(room);
     return this.viewFor(room, host.id);
   }
 
@@ -165,6 +231,10 @@ export class GameStore {
         isHost: player.id === room.hostId,
         isMayor: player.id === room.mayorId
       })),
+      botAi: {
+        enabled: this.botAi.enabled,
+        config: room.botConfig
+      },
       round: room.round
     };
   }
@@ -183,6 +253,10 @@ export class GameStore {
     const room = this.getRoom(code);
     if (!room) return { ok: false as const, error: "Partie introuvable." };
     if (room.phase !== "LOBBY") return { ok: false as const, error: "La partie a deja commence." };
+    if (room.players.length >= room.config.maxPlayers && room.botConfig.autoFill) {
+      const bot = room.players.find((p) => p.isBot);
+      if (bot) room.players = room.players.filter((p) => p.id !== bot.id);
+    }
     if (room.players.length >= room.config.maxPlayers) return { ok: false as const, error: "La partie est complete." };
     const existing = room.players.find((p) => p.sessionId === sessionId);
     if (existing) {
@@ -193,6 +267,7 @@ export class GameStore {
     }
     const player = createPlayer(name, socketId, sessionId, false);
     room.players.push(player);
+    this.syncLobbyBots(room);
     room.narrator = `${player.name} a rejoint la salle.`;
     this.log(room, "system", `${player.name} rejoint la salle.`);
     this.emit(room);
@@ -207,12 +282,14 @@ export class GameStore {
     const room = this.requireHost(code, actorSocketId);
     if (!room) return;
     if (room.phase !== "LOBBY") return this.reject(actorSocketId, "Les bots ne peuvent etre ajoutes que dans le lobby.");
-    if (!this.botAi.enabled) return this.reject(actorSocketId, "Bots IA desactives : configurez Azure OpenAI cote serveur.");
+    if (!this.botAi.enabled || !room.botConfig.enabled) return this.reject(actorSocketId, "Bots IA desactives pour ce salon.");
     const existingBots = room.players.filter((p) => p.isBot).length;
     const allowed = Math.min(Math.max(0, Math.floor(count)), this.botAi.maxPerRoom - existingBots, room.config.maxPlayers - room.players.length);
     if (allowed <= 0) return this.reject(actorSocketId, "Impossible d'ajouter plus de bots dans ce salon.");
     for (let index = 0; index < allowed; index += 1) {
-      room.players.push(createBotPlayer(this.nextBotName(room)));
+      const bot = createBotPlayer(this.nextBotName(room));
+      room.players.push(bot);
+      this.ensureBotBrain(room, bot);
     }
     room.narrator = `${allowed} bot(s) IA ajoute(s) au lobby.`;
     this.log(room, "system", `${allowed} bot(s) IA ajoute(s).`);
@@ -225,6 +302,20 @@ export class GameStore {
     const missing = Math.max(0, Math.min(room.config.maxPlayers, Math.floor(targetCount)) - room.players.length);
     if (!missing) return this.reject(actorSocketId, "Le salon a deja atteint cette taille.");
     this.addBots(code, actorSocketId, missing);
+  }
+
+  updateBotConfig(code: string, actorSocketId: string, botConfig: Partial<BotRoomConfig>) {
+    const room = this.requireHost(code, actorSocketId);
+    if (!room) return;
+    if (room.phase !== "LOBBY") return this.reject(actorSocketId, "La configuration des bots ne peut etre modifiee que dans le lobby.");
+    if (!this.botAi.enabled) return this.reject(actorSocketId, "Bots IA desactives cote serveur.");
+    const next = mergeBotConfig(botConfig, room.botConfig);
+    next.enabled = this.botAi.enabled && next.enabled;
+    next.count = Math.min(next.count, this.botAi.maxPerRoom, Math.max(0, room.config.maxPlayers - room.players.filter((p) => !p.isBot).length));
+    room.botConfig = next;
+    this.syncLobbyBots(room);
+    this.log(room, "system", "Configuration des bots IA mise a jour.");
+    this.emit(room);
   }
 
   reconnect(code: string, sessionId: string, socketId: string) {
@@ -272,6 +363,8 @@ export class GameStore {
     const nextConfig = mergeConfig({ ...room.config, ...config, durations: { ...room.config.durations, ...config.durations } });
     if (nextConfig.maxPlayers < room.players.length) return this.reject(actorSocketId, "Le nombre maximum ne peut pas etre inferieur au nombre de joueurs deja connectes.");
     room.config = nextConfig;
+    room.botConfig.count = Math.min(room.botConfig.count, this.botAi.maxPerRoom, Math.max(0, room.config.maxPlayers - room.players.filter((p) => !p.isBot).length));
+    this.syncLobbyBots(room);
     room.narrator = "Configuration avancee mise a jour.";
     this.log(room, "system", "Configuration mise a jour par l'hote.");
     this.emit(room);
@@ -320,6 +413,7 @@ export class GameStore {
       room.narrator = `${player.name} a quitte le salon.`;
       this.log(room, "system", `${player.name} quitte le salon.`);
     }
+    this.syncLobbyBots(room);
     if (leavingSocketId) this.onClose(leavingSocketId, "Vous avez quitte le salon.");
     this.emit(room);
   }
@@ -338,6 +432,7 @@ export class GameStore {
     room.phase = "MAYOR_NOMINATION";
     room.botActionKeys = new Set();
     room.chatMessages = [];
+    room.botThinkingIds = new Set();
     room.mayorNominations = [];
     room.mayorNominees = [];
     room.mayorVotes = [];
@@ -362,6 +457,7 @@ export class GameStore {
     if (!voter.alive) return this.reject(actorSocketId, "Vous etes elimine.");
     if (!voter.canVote) return this.reject(actorSocketId, "Vous ne pouvez pas nominer.");
     if (!target?.alive) return this.reject(actorSocketId, "Cible invalide.");
+    if (target.isBot && !room.botConfig.allowMayor) return this.reject(actorSocketId, "Les bots ne peuvent pas devenir Maire dans ce salon.");
     room.mayorNominations = room.mayorNominations.filter((vote) => vote.voterId !== voter.id).concat({ voterId: voter.id, targetId });
     this.log(room, "vote", `${voter.name} propose ${target.name} comme candidat Maire.`);
     room.narrator = "Les candidatures au poste de Maire sont visibles publiquement. Chaque joueur peut encore modifier sa proposition.";
@@ -377,6 +473,7 @@ export class GameStore {
     if (!voter.alive) return this.reject(actorSocketId, "Vous etes elimine.");
     if (!voter.canVote) return this.reject(actorSocketId, "Vous ne pouvez pas voter.");
     if (!target?.alive) return this.reject(actorSocketId, "Cible invalide.");
+    if (target.isBot && !room.botConfig.allowMayor) return this.reject(actorSocketId, "Les bots ne peuvent pas devenir Maire dans ce salon.");
     if (room.mayorNominees.length && !room.mayorNominees.includes(target.id)) return this.reject(actorSocketId, "Le vote du Maire est limite aux candidats nomines.");
     room.mayorVotes = room.mayorVotes.filter((vote) => vote.voterId !== voter.id).concat({ voterId: voter.id, targetId });
     this.log(room, "vote", `${voter.name} vote pour ${target.name} comme Maire.`);
@@ -418,6 +515,8 @@ export class GameStore {
     this.clearTimer(room);
     room.phase = "LOBBY";
     room.players = room.players.filter((player) => !player.isBot);
+    room.botBrains.clear();
+    room.botThinkingIds.clear();
     if (!room.players.some((player) => player.id === room.hostId)) room.hostId = room.players[0]?.id ?? room.hostId;
     room.round = 0;
     room.mayorId = undefined;
@@ -431,6 +530,8 @@ export class GameStore {
     room.nominees = [];
     room.defenseRequests = [];
     room.chatMessages = [];
+    room.botThinkingIds = new Set();
+    room.botBrains = new Map();
     room.botActionKeys = new Set();
     room.transition = undefined;
     room.timerStartedAt = undefined;
@@ -454,6 +555,7 @@ export class GameStore {
       player.revealedRole = undefined;
     });
     this.log(room, "system", "Retour au lobby par l'hote.");
+    this.syncLobbyBots(room);
     this.emit(room);
   }
 
@@ -710,7 +812,12 @@ export class GameStore {
     const actor = room?.players.find((p) => p.socketId === actorSocketId);
     if (!room || !actor) return this.reject(actorSocketId, "Partie introuvable.");
     if (!canSendChat(actor, room)) return this.reject(actorSocketId, "Vous ne pouvez pas parler maintenant.");
-    this.addChatMessage(room, actor, text, chatScopeFor(actor, room));
+    const message = this.addChatMessage(room, actor, text, chatScopeFor(actor, room));
+    if (message) {
+      console.log(`[BotAI] chat message received: ${actor.name}: ${message.text}`);
+      this.updateBotMemoryFromMessage(room, message);
+      this.scheduleMentionedBotReplies(room, message);
+    }
     this.emit(room);
   }
 
@@ -1130,6 +1237,12 @@ export class GameStore {
       p.canSpeak = true;
       p.revealedRole = undefined;
       p.secretInfo = [`Votre role secret est ${ROLE_LABELS[p.role]}.`];
+      if (p.isBot) {
+        const brain = this.ensureBotBrain(room, p);
+        brain.privateKnowledge = [`Role secret: ${ROLE_LABELS[p.role]}.`];
+        brain.memory.push(`Tu as recu le role ${ROLE_LABELS[p.role]}.`);
+        brain.memory = brain.memory.slice(-12);
+      }
     });
   }
 
@@ -1138,7 +1251,7 @@ export class GameStore {
   }
 
   private pickNextMayor(room: Room) {
-    return room.players.find((p) => p.alive)?.id;
+    return room.players.find((p) => p.alive && (room.botConfig.allowMayor || !p.isBot))?.id ?? room.players.find((p) => p.alive)?.id;
   }
 
   private nextBotName(room: Room) {
@@ -1150,14 +1263,73 @@ export class GameStore {
     return `${base} ${suffix}`;
   }
 
+  private applyInitialBotConfig(room: Room) {
+    if (room.phase !== "LOBBY" || !this.botAi.enabled || !room.botConfig.enabled) return;
+    this.syncLobbyBots(room);
+  }
+
+  private syncLobbyBots(room: Room) {
+    if (room.phase !== "LOBBY") return;
+    if (!this.botAi.enabled || !room.botConfig.enabled) {
+      room.players = room.players.filter((player) => !player.isBot);
+      room.botBrains.clear();
+      room.botThinkingIds.clear();
+      return;
+    }
+    const humanCount = room.players.filter((player) => !player.isBot).length;
+    const desired = room.botConfig.autoFill
+      ? Math.max(room.botConfig.count, MIN_PLAYERS - humanCount)
+      : room.botConfig.count;
+    const targetBots = Math.min(desired, this.botAi.maxPerRoom, Math.max(0, room.config.maxPlayers - humanCount));
+    const currentBots = room.players.filter((player) => player.isBot).length;
+    if (currentBots < targetBots) {
+      for (let index = currentBots; index < targetBots; index += 1) {
+        const bot = createBotPlayer(this.nextBotName(room));
+        room.players.push(bot);
+        this.ensureBotBrain(room, bot);
+      }
+    } else if (currentBots > targetBots) {
+      let remaining = currentBots - targetBots;
+      room.players = room.players.filter((player) => {
+        if (!player.isBot || remaining <= 0) return true;
+        remaining -= 1;
+        room.botBrains.delete(player.id);
+        room.botThinkingIds.delete(player.id);
+        return false;
+      });
+    }
+    for (const bot of room.players.filter((player) => player.isBot)) this.ensureBotBrain(room, bot);
+  }
+
+  private ensureBotBrain(room: Room, bot: Player) {
+    const existing = room.botBrains.get(bot.id);
+    if (existing) return existing;
+    const profile = BOT_PROFILES[bot.name] ?? BOT_PROFILE_FALLBACKS[room.botBrains.size % BOT_PROFILE_FALLBACKS.length];
+    const brain: BotBrain = {
+      botId: bot.id,
+      botName: bot.name,
+      personality: profile.personality,
+      speakingStyle: profile.speakingStyle,
+      suspicionMap: new Map(),
+      memory: [`Profil: ${profile.personality}. Strategie initiale: ${profile.currentStrategy}.`],
+      lastMessagesSeen: [],
+      privateKnowledge: [],
+      currentStrategy: profile.currentStrategy,
+      recentMessages: []
+    };
+    room.botBrains.set(bot.id, brain);
+    return brain;
+  }
+
   private scheduleBotTurns(room: Room) {
-    if (!this.botAi.enabled || room.phase === "LOBBY" || room.phase === "GAME_OVER") return;
+    if (!this.botAi.enabled || !room.botConfig.enabled || room.phase === "LOBBY" || room.phase === "GAME_OVER") return;
     const candidates = room.players.filter((p) => p.isBot && p.alive);
     for (const bot of candidates) {
       const key = this.botActionKey(room, bot);
       if (!key || room.botActionKeys.has(key)) continue;
       room.botActionKeys.add(key);
-      const delay = 500 + Math.floor(Math.random() * 1400);
+      const baseDelay = Math.max(250, room.botConfig.averageResponseMs);
+      const delay = Math.max(250, Math.floor(baseDelay * 0.6 + Math.random() * baseDelay * 0.8));
       setTimeout(() => void this.runBotTurn(room.code, bot.id, key), delay);
     }
   }
@@ -1209,7 +1381,9 @@ export class GameStore {
       return;
     }
     const context = this.botContext(room, bot);
-    const decision = await this.botAi.decide(context) ?? this.fallbackBotDecision(room, bot, context.allowedActions);
+    console.log(`[BotAI] ${bot.name} context sent: messages=${context.visibleMessages.length} memory=${context.memory.length} suspicions=${context.knownSuspicions.length}`);
+    const rawDecision = await this.botAi.decide(context, room.botConfig.participation) ?? this.fallbackBotDecision(room, bot, context.allowedActions);
+    const decision = rawDecision ? this.deduplicateBotDecision(room, bot, rawDecision) : undefined;
     if (!decision) {
       console.log(`[BotAI] Bot ${bot.name} phase=${room.phase} action=pass reason=no-valid-decision`);
       this.log(room, "system", `${bot.name} passe son tour IA.`);
@@ -1230,13 +1404,13 @@ export class GameStore {
 
   private fallbackBotDecision(room: Room, bot: Player, allowedActions: BotAllowedAction[]): BotDecision | undefined {
     const aliveTargets = room.players.filter((p) => p.alive && p.id !== bot.id);
-    const anyAlive = room.players.filter((p) => p.alive);
+    const mayorTargets = room.players.filter((p) => p.alive && (room.botConfig.allowMayor || !p.isBot));
     if (allowedActions.includes("nominateMayor")) {
-      const target = pickBotTarget(anyAlive);
+      const target = pickBotTarget(mayorTargets);
       return target ? { action: "nominateMayor", targetPlayerId: target.id } : undefined;
     }
     if (allowedActions.includes("voteMayor")) {
-      const candidates = room.mayorNominees.length ? anyAlive.filter((p) => room.mayorNominees.includes(p.id)) : anyAlive;
+      const candidates = room.mayorNominees.length ? mayorTargets.filter((p) => room.mayorNominees.includes(p.id)) : mayorTargets;
       const target = pickBotTarget(candidates);
       return target ? { action: "voteMayor", targetPlayerId: target.id, reason: `${target.name} me semble capable de tenir la salle.` } : undefined;
     }
@@ -1256,6 +1430,37 @@ export class GameStore {
     if (allowedActions.includes("nightAction")) return this.fallbackBotNightDecision(room, bot);
     if (allowedActions.includes("speak")) return { action: "speak", message: "Je reste attentif aux contradictions dans ce qui vient d'etre dit." };
     return undefined;
+  }
+
+  private fallbackMentionReply(room: Room, bot: Player, messageId: string): BotDecision | undefined {
+    const source = room.chatMessages.find((message) => message.id === messageId);
+    const brain = this.ensureBotBrain(room, bot);
+    const suspect = highestSuspicion(room, brain);
+    const variants = [
+      `${source?.playerName ?? "Je t'entends"}, je regarde surtout ${suspect?.name ?? "les votes"} pour l'instant.`,
+      `Je ne veux pas accuser trop vite, mais ${suspect?.name ?? "ce silence"} me parait a surveiller.`,
+      `Bonne question. Mon impression actuelle: ${suspect?.name ?? "les reactions"} merite qu'on insiste un peu.`
+    ];
+    const message = firstUnusedBotMessage(room, bot, variants) ?? variants[0];
+    return { action: "speak", message };
+  }
+
+  private rememberBotSpeech(room: Room, bot: Player, text: string) {
+    const brain = this.ensureBotBrain(room, bot);
+    const clean = text.trim().replace(/\s+/g, " ").slice(0, 280);
+    if (!clean) return;
+    brain.recentMessages.push(clean);
+    brain.memory.push(`Tu as dit: "${clean}"`);
+    brain.recentMessages = brain.recentMessages.slice(-8);
+    brain.memory = brain.memory.slice(-12);
+  }
+
+  private deduplicateBotDecision(room: Room, bot: Player, decision: BotDecision): BotDecision {
+    if (decision.action !== "speak") return decision;
+    const message = firstUnusedBotMessage(room, bot, [decision.message]);
+    if (message) return { ...decision, message };
+    const fallback = this.fallbackMentionReply(room, bot, room.chatMessages.at(-1)?.id ?? "");
+    return { ...decision, message: fallback?.action === "speak" ? fallback.message : "Je vais observer encore un peu avant d'accuser." };
   }
 
   private fallbackBotNightDecision(room: Room, bot: Player): BotDecision | undefined {
@@ -1291,10 +1496,12 @@ export class GameStore {
     return undefined;
   }
 
-  private botContext(room: Room, bot: Player): BotAIContext {
+  private botContext(room: Room, bot: Player, addressedMessageId?: string): BotAIContext {
     const activeStep = room.phase === "NIGHT" ? room.night.steps[room.night.stepIndex] : undefined;
     const allowedActions = botAllowedActions(room, bot, activeStep);
-    const visibleMessages = visibleChatMessages(room, bot);
+    const brain = this.ensureBotBrain(room, bot);
+    const visibleMessages = visibleChatMessages(room, bot).slice(-18);
+    const lastMessagesAddressedToBot = visibleMessages.filter((message) => message.id === addressedMessageId || mentionsBot(message.text, bot.name)).slice(-5);
     const nominatedPlayers = (room.phase === "MAYOR_ELECTION" ? room.mayorNominees : room.nominees)
       .map((id) => room.players.find((p) => p.id === id && p.alive))
       .filter((p): p is Player => !!p)
@@ -1306,15 +1513,24 @@ export class GameStore {
         : { votes: [], totals: [] };
     return {
       botName: bot.name,
+      botPersonality: brain.personality,
+      speakingStyle: brain.speakingStyle,
       botRole: bot.role,
       phase: room.phase,
       currentNightStep: activeStep,
       publicEvents: botVisibleEvents(room, bot),
       visibleMessages,
+      lastMessagesAddressedToBot,
       alivePlayers: room.players.filter((p) => p.alive).map((p) => ({ id: p.id, name: p.name, isSelf: p.id === bot.id, isMayor: p.id === room.mayorId })),
       nominatedPlayers,
       currentVoteState,
-      privateRoleInfo: botPrivateInfo(room, bot, activeStep),
+      knownSuspicions: [...brain.suspicionMap.entries()]
+        .map(([playerId, suspicion]) => ({ playerId, playerName: room.players.find((player) => player.id === playerId)?.name ?? "Joueur inconnu", suspicion }))
+        .sort((a, b) => b.suspicion - a.suspicion)
+        .slice(0, 8),
+      memory: brain.memory.slice(-10),
+      privateRoleInfo: [...brain.privateKnowledge, ...botPrivateInfo(room, bot, activeStep)].slice(-12),
+      currentStrategy: brain.currentStrategy,
       allowedActions
     };
   }
@@ -1324,6 +1540,7 @@ export class GameStore {
     if (decision.action === "speak") {
       if (!canSendChat(bot, room)) return;
       this.addChatMessage(room, bot, decision.message, chatScopeFor(bot, room));
+      this.rememberBotSpeech(room, bot, decision.message);
       this.emit(room);
       return;
     }
@@ -1342,10 +1559,16 @@ export class GameStore {
     if (!allowed.includes(decision.action)) return `action-not-allowed:${decision.action}`;
     if (decision.action === "pass") return undefined;
     if (decision.action === "speak") return canSendChat(bot, room) && !!decision.message.trim() ? undefined : "cannot-speak-now";
-    if (decision.action === "nominateMayor") return validAliveTarget(room, decision.targetPlayerId) ? undefined : "invalid-mayor-nomination-target";
+    if (decision.action === "nominateMayor") {
+      const target = validAliveTarget(room, decision.targetPlayerId);
+      if (!target) return "invalid-mayor-nomination-target";
+      if (target.isBot && !room.botConfig.allowMayor) return "bot-mayor-disabled";
+      return undefined;
+    }
     if (decision.action === "voteMayor") {
       const target = validAliveTarget(room, decision.targetPlayerId);
       if (!target) return "invalid-mayor-vote-target";
+      if (target.isBot && !room.botConfig.allowMayor) return "bot-mayor-disabled";
       if (room.mayorNominees.length && !room.mayorNominees.includes(target.id)) return "target-not-mayor-nominee";
       return undefined;
     }
@@ -1386,7 +1609,7 @@ export class GameStore {
 
   private applyBotMayorNomination(room: Room, bot: Player, targetId: string) {
     const target = room.players.find((p) => p.id === targetId && p.alive);
-    if (room.phase !== "MAYOR_NOMINATION" || !bot.canVote || !target) return;
+    if (room.phase !== "MAYOR_NOMINATION" || !bot.canVote || !target || (target.isBot && !room.botConfig.allowMayor)) return;
     room.mayorNominations = room.mayorNominations.filter((vote) => vote.voterId !== bot.id).concat({ voterId: bot.id, targetId });
     this.log(room, "vote", `${bot.name} propose ${target.name} comme candidat Maire.`);
     this.emit(room);
@@ -1394,7 +1617,7 @@ export class GameStore {
 
   private applyBotMayorVote(room: Room, bot: Player, targetId: string, reason?: string) {
     const target = room.players.find((p) => p.id === targetId && p.alive);
-    if (room.phase !== "MAYOR_ELECTION" || !bot.canVote || !target || (room.mayorNominees.length && !room.mayorNominees.includes(target.id))) return;
+    if (room.phase !== "MAYOR_ELECTION" || !bot.canVote || !target || (target.isBot && !room.botConfig.allowMayor) || (room.mayorNominees.length && !room.mayorNominees.includes(target.id))) return;
     room.mayorVotes = room.mayorVotes.filter((vote) => vote.voterId !== bot.id).concat({ voterId: bot.id, targetId });
     if (reason) this.addChatMessage(room, bot, reason, "public");
     this.log(room, "vote", `${bot.name} vote pour ${target.name} comme Maire.`);
@@ -1450,6 +1673,7 @@ export class GameStore {
       const target = alive.find((p) => p.id === decision.targetPlayerId);
       if (!target?.role) return this.completeStep(room, step);
       bot.secretInfo.push(`${target.name} est ${ROLE_LABELS[target.role]}.`);
+      this.ensureBotBrain(room, bot).privateKnowledge.push(`${target.name} est ${ROLE_LABELS[target.role]}.`);
       return this.completeStep(room, step);
     }
     if (step === "avocate" && bot.role === "Avocate") {
@@ -1495,9 +1719,80 @@ export class GameStore {
 
   private addChatMessage(room: Room, player: Player, text: string, scope: ChatMessage["scope"]) {
     const clean = text.trim().replace(/\s+/g, " ").slice(0, 280);
-    if (!clean) return;
-    room.chatMessages.push({ id: randomId(), at: Date.now(), playerId: player.id, playerName: player.name, text: clean, scope });
+    if (!clean) return undefined;
+    const message = { id: randomId(), at: Date.now(), playerId: player.id, playerName: player.name, isBot: player.isBot, text: clean, scope };
+    room.chatMessages.push(message);
     room.chatMessages = room.chatMessages.slice(-120);
+    return message;
+  }
+
+  private updateBotMemoryFromMessage(room: Room, message: ChatMessage) {
+    if (message.scope !== "public") return;
+    for (const bot of room.players.filter((player) => player.isBot)) {
+      const brain = this.ensureBotBrain(room, bot);
+      brain.lastMessagesSeen = visibleChatMessages(room, bot).slice(-12).map((item) => `${item.playerName}: ${item.text}`);
+      if (message.playerId !== bot.id && mentionsBot(message.text, bot.name)) {
+        brain.memory.push(`${message.playerName} t'a appele directement: "${message.text}"`);
+      } else if (message.playerId !== bot.id && message.text.includes("?")) {
+        brain.memory.push(`Question entendue de ${message.playerName}: "${message.text}"`);
+      }
+      if (!message.isBot) adjustSuspicionFromText(brain, room, message);
+      brain.memory = brain.memory.slice(-12);
+    }
+  }
+
+  private scheduleMentionedBotReplies(room: Room, message: ChatMessage) {
+    if (message.scope !== "public" || message.isBot || !this.botAi.enabled || !room.botConfig.enabled) return;
+    const mentionedBots = room.players.filter((player) => player.isBot && mentionsBot(message.text, player.name));
+    for (const bot of mentionedBots) {
+      console.log(`[BotAI] mention detected: ${bot.name}`);
+      if (!bot.alive) {
+        console.log(`[BotAI] ${bot.name} skipped: eliminated`);
+        continue;
+      }
+      if (!canSendChat(bot, room) || !room.botConfig.allowDebateSpeech) {
+        console.log(`[BotAI] ${bot.name} skipped: not allowed to speak in this phase`);
+        continue;
+      }
+      const key = `mention:${message.id}:${bot.id}`;
+      if (room.botActionKeys.has(key)) continue;
+      room.botActionKeys.add(key);
+      room.botThinkingIds.add(bot.id);
+      console.log(`[BotAI] ${bot.name} generating reply`);
+      this.emit(room);
+      setTimeout(() => void this.runBotMentionReply(room.code, bot.id, message.id, key), 350 + Math.floor(Math.random() * 650));
+    }
+  }
+
+  private async runBotMentionReply(code: string, botId: string, messageId: string, key: string) {
+    const room = this.getRoom(code);
+    const bot = room?.players.find((player) => player.id === botId && player.isBot);
+    if (!room || !bot || !room.botActionKeys.has(key)) return;
+    try {
+      if (!bot.alive || !canSendChat(bot, room) || !room.botConfig.allowDebateSpeech) {
+        console.log(`[BotAI] ${bot.name} skipped: not allowed to speak in this phase`);
+        return;
+      }
+      const context = this.botContext(room, bot, messageId);
+      context.allowedActions = ["speak"];
+      console.log(`[BotAI] ${bot.name} context sent: messages=${context.visibleMessages.length} addressed=${context.lastMessagesAddressedToBot.length}`);
+      const rawDecision = await this.botAi.decide(context, room.botConfig.participation) ?? this.fallbackMentionReply(room, bot, messageId);
+      const decision = rawDecision ? this.deduplicateBotDecision(room, bot, rawDecision) : undefined;
+      if (!decision || decision.action !== "speak") return;
+      console.log(`[BotAI] ${bot.name} action=speak`);
+      const refusal = this.validateBotDecision(room, bot, decision);
+      if (refusal) {
+        console.warn(`[BotAI] ${bot.name} mention reply refused=${refusal}`);
+        return;
+      }
+      this.applyBotDecision(room, bot, decision);
+      console.log(`[BotAI] ${bot.name} response published`);
+    } catch (error) {
+      console.error("[BotAI] Azure error:", error instanceof Error ? error.message : error);
+    } finally {
+      room?.botThinkingIds.delete(botId);
+      if (room) this.emit(room);
+    }
   }
 
   private silencedText(room: Room) {
@@ -1551,6 +1846,10 @@ export class GameStore {
       status: room.phase === "LOBBY" ? "lobby" : room.phase === "GAME_OVER" ? "finished" : "inGame",
       phase: room.phase,
       audioMode: room.audioMode,
+      botAi: {
+        enabled: this.botAi.enabled,
+        config: room.botConfig
+      },
       createdAt: room.createdAt
     };
   }
@@ -1605,7 +1904,7 @@ export class GameStore {
       round: room.round,
       config: room.config,
       lobby: lobbyInfo(room.players.length, room.config),
-      botAi: { enabled: this.botAi.enabled, maxPerRoom: this.botAi.maxPerRoom, audioEnabled: this.botAi.audioEnabled },
+      botAi: { enabled: this.botAi.enabled, maxPerRoom: this.botAi.maxPerRoom, audioEnabled: room.botConfig.audioEnabled, config: room.botConfig },
       players: room.players.map((p) => publicPlayer(p, room, activeStep, player)),
       you: player
         ? {
@@ -1650,6 +1949,7 @@ export class GameStore {
       nominees: showsNominations(room.phase) ? room.nominees : [],
       defenseRequests: showsNominations(room.phase) ? room.defenseRequests : [],
       chatMessages: visibleChatMessages(room, player),
+      botThinking: room.players.filter((bot) => bot.isBot && room.botThinkingIds.has(bot.id) && canSendChat(bot, room)).map((bot) => bot.name),
       infiltratorVotes: canSeeInfiltratorVotes(player, room, activeStep) ? infiltratorVoteDetails(room) : undefined,
       infiltratorVoteLeader: canSeeInfiltratorVotes(player, room, activeStep) ? infiltratorVoteLeader(room) : undefined,
       lastResult: room.lastResult,
@@ -1743,10 +2043,10 @@ function canActFor(player: Player, room: Room, activeStep?: NightStep) {
 
 function botAllowedActions(room: Room, bot: Player, activeStep?: NightStep): BotAllowedAction[] {
   if (!bot.alive) return ["pass"];
-  if (room.phase === "MAYOR_NOMINATION" && bot.canVote) return ["nominateMayor"];
+  if (room.phase === "MAYOR_NOMINATION" && bot.canVote) return room.botConfig.allowMayor ? ["nominateMayor"] : ["pass"];
   if (room.phase === "MAYOR_ELECTION" && bot.canVote) return ["voteMayor"];
-  if (room.phase === "DEBATE" && bot.canSpeak && !bot.muted) return ["speak", "pass"];
-  if (room.phase === "DEFENSE" && bot.speaking) return ["speak", "pass"];
+  if (room.phase === "DEBATE" && room.botConfig.allowDebateSpeech && bot.canSpeak && !bot.muted) return ["speak", "pass"];
+  if (room.phase === "DEFENSE" && room.botConfig.allowDebateSpeech && bot.speaking) return ["speak", "pass"];
   if (room.phase === "NOMINATION" && bot.canVote) return ["nominate"];
   if (room.phase === "DEFENSE_REQUESTS" && room.nominees.includes(bot.id)) return ["requestDefense", "speak", "pass"];
   if (room.phase === "VOTING" && bot.canVote) return ["vote"];
@@ -1773,6 +2073,60 @@ function visibleChatMessages(room: Room, viewer?: Player) {
 
 function validAliveTarget(room: Room, targetId: string) {
   return room.players.find((p) => p.id === targetId && p.alive);
+}
+
+function mentionsBot(text: string, botName: string) {
+  const normalizedText = normalizeMention(text);
+  const normalizedName = normalizeMention(botName);
+  const shortName = normalizedName.replace(/^bot\s+/, "");
+  return containsMention(normalizedText, normalizedName) || containsMention(normalizedText, `@${normalizedName}`) || containsMention(normalizedText, shortName);
+}
+
+function containsMention(text: string, mention: string) {
+  return new RegExp(`(^|\\s|@|,|:|;|\\?)${escapeRegExp(mention)}($|\\s|,|\\?|!|:|;)`).test(text);
+}
+
+function normalizeMention(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\w@\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function adjustSuspicionFromText(brain: BotBrain, room: Room, message: ChatMessage) {
+  const text = normalizeMention(message.text);
+  for (const player of room.players) {
+    if (!player.alive || player.id === message.playerId || player.id === brain.botId) continue;
+    if (mentionsBot(message.text, player.name)) {
+      const delta = /\b(suspect|bizarre|etrange|accuse|ment|infiltre)\b/.test(text) ? 2 : 1;
+      brain.suspicionMap.set(player.id, clampSuspicion((brain.suspicionMap.get(player.id) ?? 0) + delta));
+    }
+  }
+}
+
+function highestSuspicion(room: Room, brain: BotBrain) {
+  const candidates = [...brain.suspicionMap.entries()]
+    .map(([id, score]) => ({ player: room.players.find((candidate) => candidate.id === id && candidate.alive), score }))
+    .filter((item): item is { player: Player; score: number } => !!item.player)
+    .sort((a, b) => b.score - a.score);
+  return candidates[0]?.player;
+}
+
+function firstUnusedBotMessage(room: Room, bot: Player, candidates: string[]) {
+  const recent = new Set(room.chatMessages.filter((message) => message.isBot).slice(-20).map((message) => normalizeMention(message.text)));
+  const brainRecent = new Set((room.botBrains.get(bot.id)?.recentMessages ?? []).map((message) => normalizeMention(message)));
+  return candidates.map((message) => message.trim().replace(/\s+/g, " ").slice(0, 280)).find((message) => message && !recent.has(normalizeMention(message)) && !brainRecent.has(normalizeMention(message)));
+}
+
+function clampSuspicion(value: number) {
+  return Math.min(10, Math.max(-5, value));
 }
 
 function botPrivateInfo(room: Room, bot: Player, activeStep?: NightStep) {

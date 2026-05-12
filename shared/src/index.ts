@@ -57,6 +57,19 @@ export type GameConfig = {
 };
 
 export type PowerKey = "ministerSave" | "ministerJail" | "lanceuseAlerte" | "agentDouble";
+export type BotParticipation = "discreet" | "normal" | "talkative";
+
+export type BotRoomConfig = {
+  enabled: boolean;
+  count: number;
+  autoFill: boolean;
+  participation: BotParticipation;
+  audioEnabled: boolean;
+  averageResponseMs: number;
+  allowMayor: boolean;
+  allowDebateSpeech: boolean;
+  allowAudio: boolean;
+};
 
 export type PowerStatus = {
   key: PowerKey;
@@ -91,6 +104,7 @@ export type ChatMessage = {
   at: number;
   playerId: string;
   playerName: string;
+  isBot?: boolean;
   text: string;
   scope: "public" | "infiltres";
 };
@@ -155,6 +169,7 @@ export type RoomView = {
     enabled: boolean;
     maxPerRoom: number;
     audioEnabled: boolean;
+    config: BotRoomConfig;
   };
   players: PlayerPublic[];
   you?: {
@@ -198,6 +213,7 @@ export type RoomView = {
   nominees: string[];
   defenseRequests: DefenseRequest[];
   chatMessages: ChatMessage[];
+  botThinking: string[];
   infiltratorVotes?: InfiltratorVoteView[];
   infiltratorVoteLeader?: VoteTotal;
   lastResult?: string;
@@ -216,6 +232,10 @@ export type AdminRoomSummary = {
   status: AdminRoomStatus;
   phase: GamePhase;
   audioMode: AudioMode;
+  botAi: {
+    enabled: boolean;
+    config: BotRoomConfig;
+  };
   createdAt: number;
 };
 
@@ -224,12 +244,22 @@ export type AdminRoomDetails = AdminRoomSummary & {
   round: number;
 };
 
+export type ServerSettings = {
+  botAi: {
+    enabled: boolean;
+    maxPerRoom: number;
+    audioEnabled: boolean;
+    defaults: BotRoomConfig;
+  };
+};
+
 export type AdminResult<T = undefined> =
   | (T extends undefined ? { ok: true } : { ok: true } & T)
   | { ok: false; error: string };
 
 export type ClientToServerEvents = {
-  createRoom: (payload: { name: string; audioMode: AudioMode; sessionId?: string; config?: Partial<GameConfig> }, ack: (view: RoomView) => void) => void;
+  getServerSettings: (ack: (settings: ServerSettings) => void) => void;
+  createRoom: (payload: { name: string; audioMode: AudioMode; sessionId?: string; config?: Partial<GameConfig>; botConfig?: Partial<BotRoomConfig> }, ack: (view: RoomView) => void) => void;
   joinRoom: (payload: { code: string; name: string; sessionId?: string }, ack: (result: { ok: true; view: RoomView } | { ok: false; error: string }) => void) => void;
   reconnectRoom: (payload: { code: string; sessionId: string }, ack: (result: { ok: true; view: RoomView } | { ok: false; error: string }) => void) => void;
   adminLogin: (payload: { username: string; password: string }, ack: (result: AdminResult<{ token: string }>) => void) => void;
@@ -238,6 +268,7 @@ export type ClientToServerEvents = {
   adminRoomDetails: (payload: { token: string; code: string }, ack: (result: AdminResult<{ room: AdminRoomDetails }>) => void) => void;
   adminDeleteRoom: (payload: { token: string; code: string }, ack: (result: AdminResult) => void) => void;
   updateConfig: (payload: { code: string; config: Partial<GameConfig> }) => void;
+  updateBotConfig: (payload: { code: string; botConfig: Partial<BotRoomConfig> }) => void;
   updateAudioMode: (payload: { code: string; audioMode: AudioMode }) => void;
   closeRoom: (payload: { code: string }) => void;
   leaveRoom: (payload: { code: string }) => void;
@@ -283,6 +314,18 @@ export const DEFAULT_DURATIONS: PhaseDurations = {
   defense: 45,
   vote: 60,
   resultReveal: 20
+};
+
+export const DEFAULT_BOT_CONFIG: BotRoomConfig = {
+  enabled: true,
+  count: 1,
+  autoFill: false,
+  participation: "normal",
+  audioEnabled: false,
+  averageResponseMs: 1500,
+  allowMayor: true,
+  allowDebateSpeech: true,
+  allowAudio: false
 };
 
 export const DEFAULT_CONFIG: GameConfig = {
@@ -396,6 +439,24 @@ export function mergeConfig(config?: Partial<GameConfig>): GameConfig {
       resultReveal: clampInt(config?.durations?.resultReveal, 5, 300, DEFAULT_DURATIONS.resultReveal)
     }
   };
+}
+
+export function mergeBotConfig(config?: Partial<BotRoomConfig>, defaults: BotRoomConfig = DEFAULT_BOT_CONFIG): BotRoomConfig {
+  return {
+    enabled: config?.enabled ?? defaults.enabled,
+    count: clampInt(config?.count, 0, 20, defaults.count),
+    autoFill: config?.autoFill ?? defaults.autoFill,
+    participation: isBotParticipation(config?.participation) ? config.participation : defaults.participation,
+    audioEnabled: config?.audioEnabled ?? defaults.audioEnabled,
+    averageResponseMs: clampInt(config?.averageResponseMs, 250, 10000, defaults.averageResponseMs),
+    allowMayor: config?.allowMayor ?? defaults.allowMayor,
+    allowDebateSpeech: config?.allowDebateSpeech ?? defaults.allowDebateSpeech,
+    allowAudio: config?.allowAudio ?? defaults.allowAudio
+  };
+}
+
+function isBotParticipation(value: unknown): value is BotParticipation {
+  return value === "discreet" || value === "normal" || value === "talkative";
 }
 
 export function generateRoleDistribution(playerCount: number, config: GameConfig = DEFAULT_CONFIG): Role[] {

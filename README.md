@@ -136,11 +136,29 @@ BOT_AI_ENABLED=true
 # Nombre maximum de bots par salon.
 BOT_MAX_PER_ROOM=6
 
+# Nombre de bots par defaut dans un salon.
+BOT_DEFAULT_COUNT=1
+
+# Complete automatiquement le lobby avec des bots.
+BOT_AUTO_FILL_ENABLED=false
+
 # Niveau de participation: discreet | normal | talkative.
 BOT_DEFAULT_PARTICIPATION=normal
 
+# Temps moyen de reponse des bots en millisecondes.
+BOT_AVERAGE_RESPONSE_MS=1500
+
+# Autorise les bots a devenir Maire.
+BOT_ALLOW_MAYOR=true
+
+# Autorise les bots a parler pendant les debats.
+BOT_ALLOW_DEBATE_SPEECH=true
+
 # Active les voix audio IA des bots. false = texte uniquement.
 BOT_AUDIO_ENABLED=false
+
+# Autorise les bots a utiliser l'audio integre.
+BOT_ALLOW_AUDIO=false
 ```
 
 | Variable | Obligatoire | Rôle | Exemple | Comportement attendu |
@@ -157,10 +175,16 @@ BOT_AUDIO_ENABLED=false
 | `AZURE_OPENAI_API_KEY` | Oui pour bots IA | Clé API Azure OpenAI. | vide dans l'exemple | Reste uniquement côté serveur. Ne jamais l'exposer au frontend. |
 | `AZURE_OPENAI_API_VERSION` | Oui pour endpoint preview | Version API realtime Azure. | `2024-10-01-preview` | Le service essaie le format realtime preview et le format GA si nécessaire. |
 | `AZURE_OPENAI_REALTIME_DEPLOYMENT` | Oui pour bots IA | Nom exact du déploiement realtime utilisé par les bots. | `gpt-realtime-1.5` | C'est le modèle principal des bots. `AZURE_OPENAI_DEPLOYMENT` n'est pas utilisé pour eux. |
-| `BOT_AI_ENABLED` | Oui | Active ou désactive les bots IA. | `true` | Si `false` ou si Azure manque, les contrôles IA sont désactivés. |
+| `BOT_AI_ENABLED` | Oui | Active ou désactive les bots IA. | `true` | Si `false`, les contrôles IA sont masqués. Azure manquant déclenche le fallback serveur. |
 | `BOT_MAX_PER_ROOM` | Oui | Limite de bots par salon. | `6` | Empêche de remplir une partie avec trop de bots. |
+| `BOT_DEFAULT_COUNT` | Optionnel | Nombre de bots par défaut dans une room. | `1` | L'interface peut le modifier par salon. |
+| `BOT_AUTO_FILL_ENABLED` | Optionnel | Complète automatiquement le lobby avec des bots. | `false` | Si activé, le serveur maintient assez de bots pour atteindre le minimum de joueurs. |
 | `BOT_DEFAULT_PARTICIPATION` | Optionnel | Niveau de prise de parole. | `normal` | Valeurs: `discreet`, `normal`, `talkative`. |
+| `BOT_AVERAGE_RESPONSE_MS` | Optionnel | Temps moyen avant action d'un bot. | `1500` | Sert de défaut; chaque salon peut le surcharger. |
+| `BOT_ALLOW_MAYOR` | Optionnel | Autorise les bots à devenir Maire. | `true` | Si `false`, les bots ne peuvent pas être nominés ni élus Maire. |
+| `BOT_ALLOW_DEBATE_SPEECH` | Optionnel | Autorise les bots à parler en débat. | `true` | Si `false`, ils continuent de voter, nominer et agir la nuit. |
 | `BOT_AUDIO_ENABLED` | Oui | Active la future voix IA. | `false` | `false` garde les bots actifs en texte: chat, nominations, votes et actions de nuit. |
+| `BOT_ALLOW_AUDIO` | Optionnel | Autorise les bots à utiliser l'audio intégré. | `false` | Prépare la voix IA future; le MVP reste texte si `BOT_AUDIO_ENABLED=false`. |
 | `BOT_AI_TIMEOUT_MS` | Optionnel | Timeout d'une décision Azure. | `12000` | Si Azure ne répond pas, le bot passe son tour et la partie continue. |
 
 Le frontend n'utilise pas de variable Vite actuellement. En production, il se connecte au backend par la même origine que la page servie.
@@ -175,19 +199,46 @@ Le service dédié est `BotRealtimeAIService`. Il centralise la communication Az
 
 Même avec `BOT_AUDIO_ENABLED=false`, les bots fonctionnent normalement en texte : ils parlent dans le chat, participent aux débats, nominent, votent, agissent la nuit, reçoivent leur rôle et peuvent devenir Maire.
 
+### Configuration des Bots IA dans l'interface
+
+Les valeurs `.env` sont les valeurs par défaut serveur. Dans l'écran de création et dans le lobby, l'hôte peut les surcharger par salon dans la section **Configuration des Bots IA** :
+
+- activer ou désactiver les bots IA pour le salon ;
+- choisir le nombre de bots ;
+- compléter automatiquement la room avec des bots ;
+- choisir la participation `discret`, `normal` ou `talkative` ;
+- activer ou désactiver la voix IA ;
+- régler le temps de réponse moyen ;
+- autoriser ou non les bots à devenir Maire ;
+- autoriser ou non les bots à parler pendant les débats ;
+- autoriser ou non les bots à utiliser l'audio.
+
+Si `BOT_AI_ENABLED=false` côté serveur, toute la section bots est masquée dans l'interface. Si Azure OpenAI est indisponible mais que `BOT_AI_ENABLED=true`, les bots restent jouables grâce au fallback serveur : ils peuvent parler avec des phrases simples, nominer, voter et agir la nuit sans bloquer la partie.
+
+### Personnalité et mémoire des bots
+
+Tous les bots utilisent le même déploiement Azure `AZURE_OPENAI_REALTIME_DEPLOYMENT`, mais chaque bot possède un état logique séparé côté backend : personnalité, style de parole, mémoire récente, messages vus, connaissances privées autorisées, stratégie courante et niveau de suspicion par joueur.
+
+Les bots lisent les derniers messages visibles du chat. Si un joueur mentionne un bot par son nom (`Bot Myriam`, `@Bot Myriam`, `Myriam`, etc.), le serveur détecte la mention, donne la priorité à ce bot et affiche temporairement `Bot Myriam reflechit...` dans le chat. Le bot répond seulement s'il est vivant et autorisé à parler dans la phase courante.
+
+Le contexte reste filtré : les personnalités et souvenirs sont ajoutés au contexte du bot, mais les rôles secrets des autres joueurs, l'état complet de la room et les actions privées invisibles ne sont jamais envoyés.
+
 Contexte envoyé au modèle :
 
 ```json
 {
   "botName": "Bot Naomi",
+  "botPersonality": "intuitive, sociale, attentive aux contradictions",
   "botRole": "Infiltre",
   "phase": "DEBATE",
   "publicEvents": [],
   "visibleMessages": [],
+  "lastMessagesAddressedToBot": [],
   "alivePlayers": [],
   "nominatedPlayers": [],
-  "currentVoteState": { "votes": [], "totals": [] },
+  "knownSuspicions": [],
   "privateRoleInfo": [],
+  "currentStrategy": "croiser les reactions sociales et les votes",
   "allowedActions": ["speak", "pass"]
 }
 ```

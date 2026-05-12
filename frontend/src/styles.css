@@ -632,6 +632,16 @@ p {
   border: 1px solid rgba(223, 185, 91, 0.28);
 }
 
+.chat-log .bot-message {
+  border-left: 3px solid #7dd3fc;
+}
+
+.chat-log .bot-thinking {
+  color: #c8d2e1;
+  font-style: italic;
+  background: rgba(125, 211, 252, 0.08);
+}
+
 .chat-form {
   display: grid;
   grid-template-columns: 1fr auto;
