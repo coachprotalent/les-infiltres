@@ -84,14 +84,23 @@ type Room = {
 type BotBrain = {
   botId: string;
   botName: string;
+  role: string;
   personality: string;
+  temperament: string;
   speakingStyle: string;
+  suspicionLevel: number;
+  humorLevel: number;
+  defensiveAggression: number;
+  accusationBias: number;
+  calmingBias: number;
   suspicionMap: Map<string, number>;
   memory: string[];
   lastMessagesSeen: string[];
   privateKnowledge: string[];
   currentStrategy: string;
   recentMessages: string[];
+  lastSpokeAt: number;
+  speechTimestamps: number[];
 };
 
 const NIGHT_STEPS_FIRST: NightStep[] = ["agent-double", "hackeuse", "avocate", "lanceuse-alerte", "infiltres", "ministre"];
@@ -108,38 +117,99 @@ const stepRole: Partial<Record<NightStep, Role>> = {
 
 const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const BOT_NAMES = ["Bot Elias", "Bot Naomi", "Bot Caleb", "Bot Myriam", "Bot Samuel", "Bot Esther", "Bot Ruth", "Bot Jonas", "Bot Sarah", "Bot Daniel"];
-const BOT_PROFILES: Record<string, Omit<BotBrain, "botId" | "botName" | "suspicionMap" | "memory" | "lastMessagesSeen" | "privateKnowledge" | "recentMessages">> = {
+type BotProfile = Pick<BotBrain, "role" | "personality" | "temperament" | "speakingStyle" | "suspicionLevel" | "humorLevel" | "defensiveAggression" | "accusationBias" | "calmingBias" | "currentStrategy">;
+
+const BOT_PROFILES: Record<string, BotProfile> = {
   "Bot Myriam": {
-    personality: "calme, analytique, prudente",
-    speakingStyle: "phrases posees, nuancees, avec une hypothese claire",
+    role: "observatrice",
+    personality: "calme, analytique, prudente, observatrice",
+    temperament: "posee et difficile a provoquer",
+    speakingStyle: "parle peu mais avec precision, nuance une hypothese avant d'accuser",
+    suspicionLevel: 6,
+    humorLevel: 1,
+    defensiveAggression: 2,
+    accusationBias: 4,
+    calmingBias: 7,
     currentStrategy: "observer les contradictions avant d'accuser"
   },
+  "Bot Daniel": {
+    role: "stratege",
+    personality: "strategique, defensif, cherche les incoherences",
+    temperament: "mefiant et combatif quand il est vise",
+    speakingStyle: "argumente en citant les contradictions et retourne les soupcons trop faciles",
+    suspicionLevel: 8,
+    humorLevel: 2,
+    defensiveAggression: 8,
+    accusationBias: 7,
+    calmingBias: 2,
+    currentStrategy: "pousser les joueurs a justifier leurs votes et leurs revirements"
+  },
+  "Bot Sarah": {
+    role: "reactive",
+    personality: "expressive, emotionnelle, rapide a reagir",
+    temperament: "vive, spontanee, parfois indignee",
+    speakingStyle: "phrases naturelles et energiques, pose vite une question directe",
+    suspicionLevel: 5,
+    humorLevel: 5,
+    defensiveAggression: 6,
+    accusationBias: 6,
+    calmingBias: 3,
+    currentStrategy: "reagir aux tensions et tester les defenses immediates"
+  },
   "Bot Elias": {
+    role: "accusateur",
     personality: "direct, observateur, suspicieux",
+    temperament: "frontal et peu patient",
     speakingStyle: "court, frontal, avec des accusations nettes",
+    suspicionLevel: 8,
+    humorLevel: 2,
+    defensiveAggression: 7,
+    accusationBias: 8,
+    calmingBias: 1,
     currentStrategy: "mettre la pression sur les joueurs evasifs"
   },
   "Bot Naomi": {
+    role: "sociale",
     personality: "intuitive, sociale, attentive aux contradictions",
+    temperament: "chaleureuse mais lucide",
     speakingStyle: "naturel, relationnel, cite les incoherences du debat",
+    suspicionLevel: 5,
+    humorLevel: 4,
+    defensiveAggression: 3,
+    accusationBias: 5,
+    calmingBias: 6,
     currentStrategy: "croiser les reactions sociales et les votes"
   },
   "Bot Caleb": {
+    role: "tacticien discret",
     personality: "strategique, discret, precis",
+    temperament: "reserve et calculateur",
     speakingStyle: "parle peu, mais cible une raison concrete",
+    suspicionLevel: 7,
+    humorLevel: 1,
+    defensiveAggression: 4,
+    accusationBias: 5,
+    calmingBias: 4,
     currentStrategy: "economiser ses interventions et peser au vote"
   },
   "Bot Samuel": {
+    role: "mediateur",
     personality: "diplomate, calme, moderateur",
+    temperament: "patient et rassembleur",
     speakingStyle: "apaise le debat tout en posant une question utile",
+    suspicionLevel: 4,
+    humorLevel: 3,
+    defensiveAggression: 2,
+    accusationBias: 3,
+    calmingBias: 9,
     currentStrategy: "faire parler les autres pour reveler les incoherences"
   }
 };
 const BOT_PROFILE_FALLBACKS = [
-  { personality: "methodique, prudent, factuel", speakingStyle: "liste un indice et une conclusion simple", currentStrategy: "suivre les votes publics" },
-  { personality: "social, curieux, peu agressif", speakingStyle: "pose des questions courtes", currentStrategy: "faire clarifier les silences" },
-  { personality: "mefiant, rapide, competitif", speakingStyle: "phrases breves avec un soupcon explicite", currentStrategy: "tester les defenses faibles" }
-] satisfies Array<Pick<BotBrain, "personality" | "speakingStyle" | "currentStrategy">>;
+  { role: "analyste", personality: "methodique, prudent, factuel", temperament: "stable", speakingStyle: "liste un indice et une conclusion simple", suspicionLevel: 5, humorLevel: 1, defensiveAggression: 3, accusationBias: 4, calmingBias: 5, currentStrategy: "suivre les votes publics" },
+  { role: "enqueteur social", personality: "social, curieux, peu agressif", temperament: "ouvert", speakingStyle: "pose des questions courtes", suspicionLevel: 4, humorLevel: 4, defensiveAggression: 2, accusationBias: 3, calmingBias: 7, currentStrategy: "faire clarifier les silences" },
+  { role: "competiteur", personality: "mefiant, rapide, competitif", temperament: "nerveux", speakingStyle: "phrases breves avec un soupcon explicite", suspicionLevel: 7, humorLevel: 2, defensiveAggression: 6, accusationBias: 7, calmingBias: 2, currentStrategy: "tester les defenses faibles" }
+] satisfies BotProfile[];
 
 export class GameStore {
   private rooms = new Map<string, Room>();
@@ -816,7 +886,7 @@ export class GameStore {
     if (message) {
       console.log(`[BotAI] chat message received: ${actor.name}: ${message.text}`);
       this.updateBotMemoryFromMessage(room, message);
-      this.scheduleMentionedBotReplies(room, message);
+      this.scheduleContextualBotReplies(room, message);
     }
     this.emit(room);
   }
@@ -1308,14 +1378,23 @@ export class GameStore {
     const brain: BotBrain = {
       botId: bot.id,
       botName: bot.name,
+      role: profile.role,
       personality: profile.personality,
+      temperament: profile.temperament,
       speakingStyle: profile.speakingStyle,
+      suspicionLevel: profile.suspicionLevel,
+      humorLevel: profile.humorLevel,
+      defensiveAggression: profile.defensiveAggression,
+      accusationBias: profile.accusationBias,
+      calmingBias: profile.calmingBias,
       suspicionMap: new Map(),
       memory: [`Profil: ${profile.personality}. Strategie initiale: ${profile.currentStrategy}.`],
       lastMessagesSeen: [],
       privateKnowledge: [],
       currentStrategy: profile.currentStrategy,
-      recentMessages: []
+      recentMessages: [],
+      lastSpokeAt: 0,
+      speechTimestamps: []
     };
     room.botBrains.set(bot.id, brain);
     return brain;
@@ -1332,6 +1411,7 @@ export class GameStore {
       const delay = Math.max(250, Math.floor(baseDelay * 0.6 + Math.random() * baseDelay * 0.8));
       setTimeout(() => void this.runBotTurn(room.code, bot.id, key), delay);
     }
+    this.scheduleQuietBotIntervention(room);
   }
 
   private botActionKey(room: Room, bot: Player) {
@@ -1428,7 +1508,16 @@ export class GameStore {
       return target ? { action: "vote", targetPlayerId: target.id, reason: `${target.name} reste le plus suspect pour moi.` } : undefined;
     }
     if (allowedActions.includes("nightAction")) return this.fallbackBotNightDecision(room, bot);
-    if (allowedActions.includes("speak")) return { action: "speak", message: "Je reste attentif aux contradictions dans ce qui vient d'etre dit." };
+    if (allowedActions.includes("speak")) {
+      const brain = this.ensureBotBrain(room, bot);
+      const suspect = highestSuspicion(room, brain);
+      return {
+        action: "speak",
+        message: suspect
+          ? `Je ne vais pas voter au hasard. Pour l'instant, ${suspect.name} m'inquiete surtout par ses reactions: il y a quelque chose de trop controle, et j'aimerais l'entendre expliquer son dernier choix.`
+          : "Je prefere qu'on ne remplisse pas le silence avec des accusations faciles. Quelqu'un peut reprendre clairement son raisonnement depuis le debut du tour ?"
+      };
+    }
     return undefined;
   }
 
@@ -1437,9 +1526,9 @@ export class GameStore {
     const brain = this.ensureBotBrain(room, bot);
     const suspect = highestSuspicion(room, brain);
     const variants = [
-      `${source?.playerName ?? "Je t'entends"}, je regarde surtout ${suspect?.name ?? "les votes"} pour l'instant.`,
-      `Je ne veux pas accuser trop vite, mais ${suspect?.name ?? "ce silence"} me parait a surveiller.`,
-      `Bonne question. Mon impression actuelle: ${suspect?.name ?? "les reactions"} merite qu'on insiste un peu.`
+      `${source?.playerName ?? "Je t'entends"}, je ne vais pas me defendre avec une phrase vide. Ce qui me gene, c'est ${suspect?.name ?? "la maniere dont le debat se deplace"}: on change de cible sans vraie raison.`,
+      `Je comprends le soupcon, mais il faut etre coherent. Si vous m'accusez, dites sur quel fait precis; sinon je prefere qu'on revienne sur ${suspect?.name ?? "les votes publics"}.`,
+      `Bonne question. Mon impression actuelle, c'est que ${suspect?.name ?? "les reactions rapides"} merite qu'on insiste un peu, parce que les reponses deviennent trop prudentes.`
     ];
     const message = firstUnusedBotMessage(room, bot, variants) ?? variants[0];
     return { action: "speak", message };
@@ -1449,10 +1538,37 @@ export class GameStore {
     const brain = this.ensureBotBrain(room, bot);
     const clean = text.trim().replace(/\s+/g, " ").slice(0, 280);
     if (!clean) return;
+    const now = Date.now();
+    brain.lastSpokeAt = now;
+    brain.speechTimestamps = [...brain.speechTimestamps.filter((at) => now - at < 60_000), now];
     brain.recentMessages.push(clean);
     brain.memory.push(`Tu as dit: "${clean}"`);
     brain.recentMessages = brain.recentMessages.slice(-8);
     brain.memory = brain.memory.slice(-12);
+  }
+
+  private canBotAutoSpeak(room: Room, bot: Player) {
+    if (!this.botAi.autoSpeakEnabled || !room.botConfig.allowDebateSpeech || !canSendChat(bot, room)) return false;
+    const brain = this.ensureBotBrain(room, bot);
+    const now = Date.now();
+    brain.speechTimestamps = brain.speechTimestamps.filter((at) => now - at < 60_000);
+    return now - brain.lastSpokeAt >= this.botAi.speakCooldownSeconds * 1000 && brain.speechTimestamps.length < this.botAi.maxMessagesPerMinute;
+  }
+
+  private markBotSpeaking(room: Room, bot: Player, text: string) {
+    console.log(`[BotAI] bot response text received: ${bot.name}: ${text}`);
+    bot.speaking = true;
+    bot.audioActive = true;
+    this.emit(room);
+    const duration = Math.min(9000, Math.max(1800, text.length * 45));
+    setTimeout(() => {
+      const nextRoom = this.getRoom(room.code);
+      const nextBot = nextRoom?.players.find((player) => player.id === bot.id && player.isBot);
+      if (!nextRoom || !nextBot) return;
+      nextBot.speaking = false;
+      nextBot.audioActive = false;
+      this.emit(nextRoom);
+    }, duration);
   }
 
   private deduplicateBotDecision(room: Room, bot: Player, decision: BotDecision): BotDecision {
@@ -1514,6 +1630,15 @@ export class GameStore {
     return {
       botName: bot.name,
       botPersonality: brain.personality,
+      botRoleplayProfile: {
+        role: brain.role,
+        temperament: brain.temperament,
+        suspicionLevel: brain.suspicionLevel,
+        humorLevel: brain.humorLevel,
+        defensiveAggression: brain.defensiveAggression,
+        accusationBias: brain.accusationBias,
+        calmingBias: brain.calmingBias
+      },
       speakingStyle: brain.speakingStyle,
       botRole: bot.role,
       phase: room.phase,
@@ -1541,7 +1666,7 @@ export class GameStore {
       if (!canSendChat(bot, room)) return;
       this.addChatMessage(room, bot, decision.message, chatScopeFor(bot, room));
       this.rememberBotSpeech(room, bot, decision.message);
-      this.emit(room);
+      this.markBotSpeaking(room, bot, decision.message);
       return;
     }
     if (decision.action === "nominateMayor") return this.applyBotMayorNomination(room, bot, decision.targetPlayerId);
@@ -1718,7 +1843,7 @@ export class GameStore {
   }
 
   private addChatMessage(room: Room, player: Player, text: string, scope: ChatMessage["scope"]) {
-    const clean = text.trim().replace(/\s+/g, " ").slice(0, 280);
+    const clean = text.trim().replace(/\s+/g, " ").slice(0, player.isBot ? 480 : 280);
     if (!clean) return undefined;
     const message = { id: randomId(), at: Date.now(), playerId: player.id, playerName: player.name, isBot: player.isBot, text: clean, scope };
     room.chatMessages.push(message);
@@ -1741,17 +1866,25 @@ export class GameStore {
     }
   }
 
-  private scheduleMentionedBotReplies(room: Room, message: ChatMessage) {
+  private scheduleContextualBotReplies(room: Room, message: ChatMessage) {
     if (message.scope !== "public" || message.isBot || !this.botAi.enabled || !room.botConfig.enabled) return;
-    const mentionedBots = room.players.filter((player) => player.isBot && mentionsBot(message.text, player.name));
-    for (const bot of mentionedBots) {
-      console.log(`[BotAI] mention detected: ${bot.name}`);
+    const candidates = room.players.filter((player) => player.isBot && (
+      mentionsBot(message.text, player.name)
+      || accusesPlayer(message.text, player.name)
+      || this.shouldBotReactToContext(room, player, message)
+    ));
+    for (const bot of candidates) {
+      console.log(`[BotAI] contextual trigger detected: ${bot.name}`);
       if (!bot.alive) {
         console.log(`[BotAI] ${bot.name} skipped: eliminated`);
         continue;
       }
       if (!canSendChat(bot, room) || !room.botConfig.allowDebateSpeech) {
         console.log(`[BotAI] ${bot.name} skipped: not allowed to speak in this phase`);
+        continue;
+      }
+      if (!this.canBotAutoSpeak(room, bot)) {
+        console.log(`[BotAI] ${bot.name} skipped: auto-speak cooldown`);
         continue;
       }
       const key = `mention:${message.id}:${bot.id}`;
@@ -1764,6 +1897,32 @@ export class GameStore {
     }
   }
 
+  private shouldBotReactToContext(room: Room, bot: Player, message: ChatMessage) {
+    const text = normalizeMention(message.text);
+    const brain = this.ensureBotBrain(room, bot);
+    if (brain.calmingBias >= 7 && /\b(calmez|stop|arretez|trop vite|aucune preuve|au hasard)\b/.test(text)) return Math.random() < 0.55;
+    if (brain.accusationBias >= 6 && /\b(contradiction|bizarre|suspect|mensonge|menteur|incoherent)\b/.test(text)) return Math.random() < 0.5;
+    if (room.chatMessages.slice(-6).some((recent) => recent.playerId === message.playerId && recent.id !== message.id && contradicts(recent.text, message.text))) return Math.random() < 0.65;
+    return false;
+  }
+
+  private scheduleQuietBotIntervention(room: Room) {
+    if (!this.botAi.autoSpeakEnabled || !room.botConfig.allowDebateSpeech) return;
+    if (!["DEBATE", "NOMINATION", "DEFENSE_REQUESTS"].includes(room.phase)) return;
+    const lastMessageAt = room.chatMessages.at(-1)?.at ?? 0;
+    if (Date.now() - lastMessageAt < this.botAi.speakCooldownSeconds * 1000) return;
+    const bots = room.players.filter((player) => player.isBot && player.alive && this.canBotAutoSpeak(room, player));
+    const bot = pickBotTarget(bots);
+    if (!bot) return;
+    const bucket = Math.floor(Date.now() / (this.botAi.speakCooldownSeconds * 1000));
+    const key = `autospeak:${room.round}:${room.phase}:${bucket}:${bot.id}`;
+    if (room.botActionKeys.has(key)) return;
+    room.botActionKeys.add(key);
+    room.botThinkingIds.add(bot.id);
+    this.onChange(room);
+    setTimeout(() => void this.runBotMentionReply(room.code, bot.id, room.chatMessages.at(-1)?.id ?? "", key), 500 + Math.floor(Math.random() * 900));
+  }
+
   private async runBotMentionReply(code: string, botId: string, messageId: string, key: string) {
     const room = this.getRoom(code);
     const bot = room?.players.find((player) => player.id === botId && player.isBot);
@@ -1771,6 +1930,10 @@ export class GameStore {
     try {
       if (!bot.alive || !canSendChat(bot, room) || !room.botConfig.allowDebateSpeech) {
         console.log(`[BotAI] ${bot.name} skipped: not allowed to speak in this phase`);
+        return;
+      }
+      if (!this.canBotAutoSpeak(room, bot)) {
+        console.log(`[BotAI] ${bot.name} skipped: auto-speak cooldown`);
         return;
       }
       const context = this.botContext(room, bot, messageId);
@@ -2080,6 +2243,20 @@ function mentionsBot(text: string, botName: string) {
   const normalizedName = normalizeMention(botName);
   const shortName = normalizedName.replace(/^bot\s+/, "");
   return containsMention(normalizedText, normalizedName) || containsMention(normalizedText, `@${normalizedName}`) || containsMention(normalizedText, shortName);
+}
+
+function accusesPlayer(text: string, playerName: string) {
+  if (!mentionsBot(text, playerName)) return false;
+  return /\b(suspect|accuse|infiltre|mensonge|menteur|bizarre|etrange|coupable|defends toi|defendre)\b/.test(normalizeMention(text));
+}
+
+function contradicts(previous: string, next: string) {
+  const a = normalizeMention(previous);
+  const b = normalizeMention(next);
+  const negationFlip = (/\bje\b.*\b(ai|avais|suis|vote|nomine)\b/.test(a) && /\bje\b.*\b(n ai pas|n avais pas|ne suis pas|pas vote|pas nomine)\b/.test(b))
+    || (/\bje\b.*\b(n ai pas|n avais pas|ne suis pas|pas vote|pas nomine)\b/.test(a) && /\bje\b.*\b(ai|avais|suis|vote|nomine)\b/.test(b));
+  const voteFlip = /\bje vote\b/.test(a) && /\bje vote\b/.test(b) && a !== b;
+  return negationFlip || voteFlip;
 }
 
 function containsMention(text: string, mention: string) {

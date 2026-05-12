@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { io, Socket } from "socket.io-client";
-import { ArrowLeft, Clock, Copy, Crown, Eye, Gavel, Lock, LogOut, Mic, MicOff, Moon, Play, RefreshCw, Settings, Shield, Sun, Trash2, Users, Vote } from "lucide-react";
+import { ArrowLeft, Clock, Copy, Crown, Eye, Gavel, Lock, LogOut, Mic, MicOff, Moon, Play, RefreshCw, Settings, Shield, Sun, Trash2, Users, Volume2, VolumeX, Vote } from "lucide-react";
 import type { AdminRoomDetails, AdminRoomSummary, BotRoomConfig, ClientToServerEvents, GameConfig, Role, RoomView, ServerSettings, ServerToClientEvents } from "@les-infiltres/shared";
 import { DEFAULT_BOT_CONFIG, DEFAULT_CONFIG, ROLE_ABILITIES, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLES, mergeBotConfig, mergeConfig } from "@les-infiltres/shared";
 import "./styles.css";
@@ -13,6 +13,7 @@ type PeerEntry = {
   audio?: HTMLAudioElement;
 };
 type AudioPermission = "idle" | "requesting" | "granted" | "denied" | "missing" | "unsupported";
+type BotAudioStatus = "disabled" | "enabled" | "speaking" | "error";
 type TimerInfo = {
   label: string;
   secondsLeft: number;
@@ -301,6 +302,7 @@ function AdminPage({ onBack }: { onBack: () => void }) {
 function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: string; onToast: (message: string) => void; onLeaveRoom: () => void }) {
   const [now, setNow] = useState(Date.now());
   const [voiceEnabled, setVoiceEnabled] = useState(() => localStorage.getItem("les-infiltres-voice") === "on");
+  const botVoice = useBotVoice(view, onToast);
   const audio = useIntegratedAudio(view, onToast);
   const you = view.you;
   const alivePlayers = view.players.filter((player) => player.alive);
@@ -383,7 +385,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
         </section>
 
         <aside className="panel side-panel">
-          <AudioPanel view={view} audio={audio} />
+          <AudioPanel view={view} audio={audio} botVoice={botVoice} />
           <h2><Users size={18} /> Joueurs</h2>
           <div className="players">
             {view.players.map((player) => (
@@ -629,7 +631,12 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
       }
       entry.audio.srcObject = stream;
       entry.audio.muted = !canHearRemote(viewRef.current, peerId);
-      void entry.audio.play().catch(() => undefined);
+      void entry.audio.play()
+        .then(() => console.info("audio playback started"))
+        .catch((error) => {
+          console.warn("audio playback error", error);
+          onToast("Audio indisponible, reponse affichee en texte.");
+        });
     };
     if (initiator) {
       void connection.createOffer()
@@ -648,6 +655,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
       return;
     }
     setPermission("requesting");
+    console.info("microphone permission status", "requesting");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       if (!stream.getAudioTracks().length) {
@@ -659,14 +667,18 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
       localStreamRef.current = stream;
       setEnabled(true);
       setPermission("granted");
+      console.info("microphone permission status", "granted");
+      console.info("speaker/audio context status", window.AudioContext ? "available" : "unavailable");
       startActivityMeter(stream);
     } catch (error) {
       const name = error instanceof DOMException ? error.name : "";
       if (name === "NotFoundError" || name === "DevicesNotFoundError") {
         setPermission("missing");
+        console.info("microphone permission status", "missing");
         onToast("Aucun micro detecte.");
       } else {
         setPermission("denied");
+        console.info("microphone permission status", "denied");
         onToast("Permission micro refusee.");
       }
     }
@@ -735,6 +747,79 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
     startAudio,
     stopAudio,
     activePeers: peerCount
+  };
+}
+
+function useBotVoice(view: RoomView, onToast: (message: string) => void) {
+  const [enabled, setEnabled] = useState(() => localStorage.getItem("les-infiltres-bot-voice") === "on");
+  const [status, setStatus] = useState<BotAudioStatus>(enabled ? "enabled" : "disabled");
+  const spokenIdsRef = useRef(new Set<string>());
+
+  const enable = () => {
+    localStorage.setItem("les-infiltres-bot-voice", "on");
+    setEnabled(true);
+    setStatus("enabled");
+    console.info("speaker/audio context status", "bot voice enabled");
+    if ("speechSynthesis" in window) {
+      const utterance = new SpeechSynthesisUtterance("Son des bots active.");
+      utterance.lang = "fr-FR";
+      utterance.volume = 0.75;
+      window.speechSynthesis.speak(utterance);
+    } else {
+      setStatus("error");
+      onToast("Audio indisponible, reponse affichee en texte.");
+    }
+  };
+
+  const disable = () => {
+    localStorage.setItem("les-infiltres-bot-voice", "off");
+    setEnabled(false);
+    setStatus("disabled");
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  };
+
+  useEffect(() => {
+    if (!enabled) return;
+    const message = [...view.chatMessages].reverse().find((item) => item.isBot && !spokenIdsRef.current.has(item.id));
+    if (!message) return;
+    spokenIdsRef.current.add(message.id);
+    console.info("bot response text received", { bot: message.playerName, text: message.text });
+    if (!("speechSynthesis" in window)) {
+      setStatus("error");
+      onToast("Audio indisponible, reponse affichee en texte.");
+      return;
+    }
+    try {
+      console.info("bot audio chunk received", { source: "browser-speech-synthesis", bot: message.playerName });
+      const utterance = new SpeechSynthesisUtterance(message.text);
+      utterance.lang = "fr-FR";
+      utterance.rate = botVoiceRate(message.playerName);
+      utterance.pitch = botVoicePitch(message.playerName);
+      utterance.volume = 0.9;
+      utterance.onstart = () => {
+        console.info("audio playback started", { bot: message.playerName });
+        setStatus("speaking");
+      };
+      utterance.onend = () => setStatus("enabled");
+      utterance.onerror = (event) => {
+        console.warn("audio playback error", event);
+        setStatus("error");
+        onToast("Audio indisponible, reponse affichee en texte.");
+      };
+      window.speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.warn("audio playback error", error);
+      setStatus("error");
+      onToast("Audio indisponible, reponse affichee en texte.");
+    }
+  }, [enabled, view.chatMessages, onToast]);
+
+  return {
+    enabled,
+    status,
+    enable,
+    disable,
+    speaking: status === "speaking" || view.players.some((player) => player.isBot && player.audioActive)
   };
 }
 
@@ -1440,13 +1525,24 @@ function GameLog({ entries }: { entries: NonNullable<RoomView["gameLog"]> }) {
   return <div className="game-log">{entries.slice(-12).map((entry) => <p key={`${entry.at}-${entry.message}`}><span>{new Date(entry.at).toLocaleTimeString()}</span> {entry.message}</p>)}</div>;
 }
 
-function AudioPanel({ view, audio }: { view: RoomView; audio: ReturnType<typeof useIntegratedAudio> }) {
+function AudioPanel({ view, audio, botVoice }: { view: RoomView; audio: ReturnType<typeof useIntegratedAudio>; botVoice: ReturnType<typeof useBotVoice> }) {
   const you = view.you;
   const muted = view.players.find((player) => player.id === you?.id)?.muted ?? false;
   if (!you) return null;
   return (
     <div className="audio">
       <h2><Shield size={18} /> Audio</h2>
+      <div className="bot-sound-panel">
+        <div className="bot-sound-status">
+          <strong>{botVoice.enabled ? "Son active" : "Son coupe"}</strong>
+          {botVoice.speaking && <span>Bot en train de parler...</span>}
+        </div>
+        <div className="actions-row audio-actions">
+          <button disabled={botVoice.enabled} onClick={botVoice.enable}><Volume2 size={17} /> Activer le son</button>
+          <button disabled={!botVoice.enabled} onClick={botVoice.disable}><VolumeX size={17} /> Couper le son</button>
+        </div>
+        {botVoice.status === "error" && <small>Audio indisponible, reponse affichee en texte.</small>}
+      </div>
       <p>{view.audioMode === "external" ? "Audio externe selectionne. Utilisez WhatsApp, Discord ou un autre canal." : you.canHearAudio ? "Audio integre actif selon les permissions serveur." : "Audio coupe pour cette phase."}</p>
       {view.audioMode === "integrated" && (
         <>
@@ -1567,6 +1663,22 @@ function audioStatusText(audio: ReturnType<typeof useIntegratedAudio>, muted: bo
   if (!audio.enabled) return "Le micro n'est pas connecte.";
   if (muted || !canSpeak) return "Micro connecte, parole coupee par les regles.";
   return `Micro ouvert. Pairs audio : ${audio.activePeers}.`;
+}
+
+function botVoiceRate(name: string) {
+  if (name.includes("Myriam")) return 0.88;
+  if (name.includes("Daniel")) return 0.96;
+  if (name.includes("Sarah")) return 1.05;
+  if (name.includes("Samuel")) return 0.9;
+  return 0.94;
+}
+
+function botVoicePitch(name: string) {
+  if (name.includes("Myriam")) return 0.92;
+  if (name.includes("Daniel")) return 0.82;
+  if (name.includes("Sarah")) return 1.16;
+  if (name.includes("Naomi")) return 1.05;
+  return 0.98;
 }
 
 function phaseLabel(phase: RoomView["phase"] | string) {

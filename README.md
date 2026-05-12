@@ -118,17 +118,23 @@ CLIENT_URL=https://infiltre-dev.traillearn.org
 ADMIN_USERNAME=aubinaso
 ADMIN_PASSWORD=change-me
 
-# Endpoint Azure OpenAI de la ressource realtime.
-AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
+# Endpoint Azure OpenAI de la ressource realtime / voix.
+AZURE_OPENAI_REALTIME_ENDPOINT=https://my-resource.openai.azure.com/
 
-# Cle API Azure OpenAI cote serveur.
-AZURE_OPENAI_API_KEY=
+# Cle API Azure OpenAI realtime cote serveur.
+AZURE_OPENAI_REALTIME_API_KEY=
 
-# Version API Azure OpenAI utilisee.
-AZURE_OPENAI_API_VERSION=2024-10-01-preview
+# Version API Azure OpenAI realtime utilisee.
+AZURE_OPENAI_REALTIME_API_VERSION=2024-10-01-preview
 
 # Nom exact du deploiement realtime Azure.
 AZURE_OPENAI_REALTIME_DEPLOYMENT=gpt-realtime-1.5
+
+# Modele de reflexion avancee des bots.
+AZURE_OPENAI_REASONING_ENDPOINT=https://my-resource.openai.azure.com/
+AZURE_OPENAI_REASONING_API_KEY=
+AZURE_OPENAI_REASONING_DEPLOYMENT=gpt5.4
+AZURE_OPENAI_REASONING_API_VERSION=2025-01-01-preview
 
 # Active les bots IA.
 BOT_AI_ENABLED=true
@@ -159,6 +165,15 @@ BOT_AUDIO_ENABLED=false
 
 # Autorise les bots a utiliser l'audio integre.
 BOT_ALLOW_AUDIO=false
+
+# Reflexion, style et prise de parole automatique.
+BOT_REASONING_ENABLED=true
+BOT_MAX_REASONING_TOKENS=1200
+BOT_RESPONSE_STYLE=advanced
+BOT_PERSONALITY_VARIATION=true
+BOT_AUTO_SPEAK_ENABLED=true
+BOT_SPEAK_COOLDOWN_SECONDS=20
+BOT_MAX_MESSAGES_PER_MINUTE=2
 ```
 
 | Variable | Obligatoire | Rôle | Exemple | Comportement attendu |
@@ -171,10 +186,14 @@ BOT_ALLOW_AUDIO=false
 | `CLIENT_URL` | Optionnel | Fallback frontend si `CORS_ORIGIN` manque. | `http://localhost:5173` | Utile surtout en développement local. |
 | `ADMIN_USERNAME` | Oui | Identifiant admin. | `aubinaso` | Requis pour accéder au dashboard admin. |
 | `ADMIN_PASSWORD` | Oui | Mot de passe admin. | `change-me` | À remplacer avant tout déploiement public. |
-| `AZURE_OPENAI_ENDPOINT` | Oui pour bots IA | Endpoint de la ressource Azure OpenAI qui contient le déploiement realtime. | `https://my-resource.openai.azure.com/` | Le backend construit l'URL realtime à partir de cet endpoint. |
-| `AZURE_OPENAI_API_KEY` | Oui pour bots IA | Clé API Azure OpenAI. | vide dans l'exemple | Reste uniquement côté serveur. Ne jamais l'exposer au frontend. |
-| `AZURE_OPENAI_API_VERSION` | Oui pour endpoint preview | Version API realtime Azure. | `2024-10-01-preview` | Le service essaie le format realtime preview et le format GA si nécessaire. |
+| `AZURE_OPENAI_REALTIME_ENDPOINT` | Oui pour voix/realtime | Endpoint de la ressource Azure OpenAI qui contient le déploiement realtime. | `https://my-resource.openai.azure.com/` | Le backend construit l'URL realtime à partir de cet endpoint. Les anciennes variables `AZURE_OPENAI_ENDPOINT/API_KEY/API_VERSION` restent acceptées en fallback. |
+| `AZURE_OPENAI_REALTIME_API_KEY` | Oui pour voix/realtime | Clé API Azure OpenAI realtime. | vide dans l'exemple | Reste uniquement côté serveur. Ne jamais l'exposer au frontend. |
+| `AZURE_OPENAI_REALTIME_API_VERSION` | Oui pour endpoint preview | Version API realtime Azure. | `2024-10-01-preview` | Le service essaie le format realtime preview et le format GA si nécessaire. |
 | `AZURE_OPENAI_REALTIME_DEPLOYMENT` | Oui pour bots IA | Nom exact du déploiement realtime utilisé par les bots. | `gpt-realtime-1.5` | C'est le modèle principal des bots. `AZURE_OPENAI_DEPLOYMENT` n'est pas utilisé pour eux. |
+| `AZURE_OPENAI_REASONING_ENDPOINT` | Oui pour réflexion avancée | Endpoint de la ressource Azure OpenAI qui contient le modèle de raisonnement. | `https://my-resource.openai.azure.com/` | Utilisé avant le realtime pour produire l'intention et le message. |
+| `AZURE_OPENAI_REASONING_API_KEY` | Oui pour réflexion avancée | Clé API du modèle reasoning. | vide dans l'exemple | Reste uniquement côté serveur. |
+| `AZURE_OPENAI_REASONING_DEPLOYMENT` | Oui pour réflexion avancée | Nom du déploiement reasoning. | `gpt5.4` | Produit les décisions profondes/personnalisées. |
+| `AZURE_OPENAI_REASONING_API_VERSION` | Oui pour réflexion avancée | Version API du modèle reasoning. | `2025-01-01-preview` | Utilisée sur `/chat/completions`. |
 | `BOT_AI_ENABLED` | Oui | Active ou désactive les bots IA. | `true` | Si `false`, les contrôles IA sont masqués. Azure manquant déclenche le fallback serveur. |
 | `BOT_MAX_PER_ROOM` | Oui | Limite de bots par salon. | `6` | Empêche de remplir une partie avec trop de bots. |
 | `BOT_DEFAULT_COUNT` | Optionnel | Nombre de bots par défaut dans une room. | `1` | L'interface peut le modifier par salon. |
@@ -185,6 +204,13 @@ BOT_ALLOW_AUDIO=false
 | `BOT_ALLOW_DEBATE_SPEECH` | Optionnel | Autorise les bots à parler en débat. | `true` | Si `false`, ils continuent de voter, nominer et agir la nuit. |
 | `BOT_AUDIO_ENABLED` | Oui | Active la future voix IA. | `false` | `false` garde les bots actifs en texte: chat, nominations, votes et actions de nuit. |
 | `BOT_ALLOW_AUDIO` | Optionnel | Autorise les bots à utiliser l'audio intégré. | `false` | Prépare la voix IA future; le MVP reste texte si `BOT_AUDIO_ENABLED=false`. |
+| `BOT_REASONING_ENABLED` | Optionnel | Active la couche reasoning quand elle est configurée. | `true` | Si absent ou non configuré, le service retombe sur realtime/fallback. |
+| `BOT_MAX_REASONING_TOKENS` | Optionnel | Budget de sortie reasoning. | `1200` | Permet des réponses plus développées sans bloquer la partie. |
+| `BOT_RESPONSE_STYLE` | Optionnel | Style de réponse attendu. | `advanced` | Guide le prompt système. |
+| `BOT_PERSONALITY_VARIATION` | Optionnel | Active les profils distincts par bot. | `true` | Les bots reçoivent rôle, tempérament, humour, suspicion, défense, accusation/calme. |
+| `BOT_AUTO_SPEAK_ENABLED` | Optionnel | Autorise les prises de parole non limitées aux tags. | `true` | Déclenche sur mention, accusation, contradiction ou silence. |
+| `BOT_SPEAK_COOLDOWN_SECONDS` | Optionnel | Cooldown de parole par bot. | `20` | Limite le spam. |
+| `BOT_MAX_MESSAGES_PER_MINUTE` | Optionnel | Maximum de messages par bot et par minute. | `2` | Priorise les humains. |
 | `BOT_AI_TIMEOUT_MS` | Optionnel | Timeout d'une décision Azure. | `12000` | Si Azure ne répond pas, le bot passe son tour et la partie continue. |
 
 Le frontend n'utilise pas de variable Vite actuellement. En production, il se connecte au backend par la même origine que la page servie.
