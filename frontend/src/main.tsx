@@ -14,6 +14,17 @@ type PeerEntry = {
 };
 type AudioPermission = "idle" | "requesting" | "granted" | "denied" | "missing" | "unsupported";
 type BotAudioStatus = "disabled" | "enabled" | "speaking" | "error";
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((event: { results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null;
+  onerror: ((event: unknown) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 type TimerInfo = {
   label: string;
   secondsLeft: number;
@@ -288,7 +299,7 @@ function AdminPage({ onBack }: { onBack: () => void }) {
               {details.players.map((player) => (
                 <div className={`player ${player.alive ? "" : "out"}`} key={player.id}>
                   <span>{player.name}{player.isBot ? " - IA" : ""}{player.isHost ? " - Hote" : ""}{player.isMayor ? " - Maire" : ""}</span>
-                  <small>{player.connected ? "en ligne" : "deconnecte"} - {player.alive ? "en jeu" : "elimine"}</small>
+                  <small>{player.connected ? "en ligne" : "deconnecte"} - {player.alive ? "en jeu" : "elimine"}{player.botVoice ? ` - voix ${player.botVoice.voiceName}` : ""}</small>
                 </div>
               ))}
             </div>
@@ -556,6 +567,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
   const viewRef = useRef(view);
   const activityFrameRef = useRef<number | undefined>(undefined);
   const audioContextRef = useRef<AudioContext | undefined>(undefined);
+  const recognitionRef = useRef<SpeechRecognitionLike | undefined>(undefined);
   const lastActivityRef = useRef(false);
 
   viewRef.current = view;
@@ -565,6 +577,8 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
     activityFrameRef.current = undefined;
     void audioContextRef.current?.close();
     audioContextRef.current = undefined;
+    recognitionRef.current?.stop();
+    recognitionRef.current = undefined;
     if (lastActivityRef.current) socket.emit("audioActivity", { code: viewRef.current.code, speaking: false });
     lastActivityRef.current = false;
     for (const peer of peersRef.current.values()) {
@@ -608,6 +622,35 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
       activityFrameRef.current = window.requestAnimationFrame(tick);
     };
     tick();
+  };
+
+  const startSpeechRecognition = () => {
+    const typedWindow = window as typeof window & { SpeechRecognition?: SpeechRecognitionConstructor; webkitSpeechRecognition?: SpeechRecognitionConstructor };
+    const Recognition = typedWindow.SpeechRecognition ?? typedWindow.webkitSpeechRecognition;
+    if (!Recognition) {
+      console.info("realtime disconnected", "browser transcription unavailable");
+      return;
+    }
+    const recognition = new Recognition();
+    recognition.lang = "fr-FR";
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.onresult = (event) => {
+      const result = event.results[event.results.length - 1];
+      const text = result?.[0]?.transcript?.trim();
+      if (!result?.isFinal || !text) return;
+      console.info("transcription received", text);
+      socket.emit("audioTranscript", { code: viewRef.current.code, text });
+    };
+    recognition.onerror = (event) => console.warn("realtime disconnected", event);
+    recognition.onend = () => console.info("realtime disconnected", "speech recognition ended");
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+      console.info("realtime connected", "browser speech recognition");
+    } catch (error) {
+      console.warn("realtime disconnected", error);
+    }
   };
 
   const ensurePeer = (peerId: string, initiator: boolean) => {
@@ -670,6 +713,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
       console.info("microphone permission status", "granted");
       console.info("speaker/audio context status", window.AudioContext ? "available" : "unavailable");
       startActivityMeter(stream);
+      startSpeechRecognition();
     } catch (error) {
       const name = error instanceof DOMException ? error.name : "";
       if (name === "NotFoundError" || name === "DevicesNotFoundError") {
@@ -746,7 +790,8 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
     permission,
     startAudio,
     stopAudio,
-    activePeers: peerCount
+    activePeers: peerCount,
+    botListening: enabled && view.players.some((player) => player.isBot && player.alive)
   };
 }
 
@@ -792,10 +837,11 @@ function useBotVoice(view: RoomView, onToast: (message: string) => void) {
     try {
       console.info("bot audio chunk received", { source: "browser-speech-synthesis", bot: message.playerName });
       const utterance = new SpeechSynthesisUtterance(message.text);
+      const voice = view.players.find((player) => player.id === message.playerId)?.botVoice;
       utterance.lang = "fr-FR";
-      utterance.rate = botVoiceRate(message.playerName);
-      utterance.pitch = botVoicePitch(message.playerName);
-      utterance.volume = 0.9;
+      utterance.rate = voice?.speakingRate ?? botVoiceRate(message.playerName);
+      utterance.pitch = voice?.pitch ?? botVoicePitch(message.playerName);
+      utterance.volume = voice?.volume ?? 0.9;
       utterance.onstart = () => {
         console.info("audio playback started", { bot: message.playerName });
         setStatus("speaking");
@@ -806,6 +852,8 @@ function useBotVoice(view: RoomView, onToast: (message: string) => void) {
         setStatus("error");
         onToast("Audio indisponible, reponse affichee en texte.");
       };
+      console.info("bot selected voice", { bot: message.playerName, voiceName: voice?.voiceName, style: voice?.voiceStyle });
+      console.info("bot audio response received", { bot: message.playerName, voiceName: voice?.voiceName });
       window.speechSynthesis.speak(utterance);
     } catch (error) {
       console.warn("audio playback error", error);
@@ -1294,10 +1342,17 @@ function ChatPanel({ view }: { view: RoomView }) {
 
 function DebatePanel({ view, timer }: { view: RoomView; timer?: TimerInfo }) {
   const speaker = view.players.find((player) => player.id === view.activePlayerId);
+  const isOwnDefense = view.phase === "DEFENSE" && !!view.you && speaker?.id === view.you.id;
   return (
     <div className="content">
       <h2>{view.phase === "DAY_ANNOUNCEMENT" ? "Le jour se leve" : view.phase === "DEFENSE" ? "Defense individuelle" : "Debat en cours"}</h2>
-      <p>Joueur qui parle : <strong>{speaker?.name ?? "discussion libre"}</strong></p>
+      <p>{view.phase === "DEFENSE" && speaker ? <>Defense de <strong>{speaker.name}</strong> en cours...</> : <>Joueur qui parle : <strong>{speaker?.name ?? "discussion libre"}</strong></>}</p>
+      {view.phase === "DEFENSE" && speaker && <p className="muted">{speaker.name} peut terminer sa defense avant la fin du chrono.</p>}
+      {isOwnDefense && (
+        <button className="primary" onClick={() => socket.emit("finishDefense", { code: view.code, participantId: speaker.id })}>
+          <Gavel size={18} /> Terminer ma defense
+        </button>
+      )}
       {timer ? <PhaseTimer timer={timer} compact /> : <p>Temps restant : <strong>non chronometre</strong></p>}
       {!view.you?.isMayor && <p className="muted">Le Maire controle la parole et le passage au vote.</p>}
     </div>
@@ -1536,6 +1591,7 @@ function AudioPanel({ view, audio, botVoice }: { view: RoomView; audio: ReturnTy
         <div className="bot-sound-status">
           <strong>{botVoice.enabled ? "Son active" : "Son coupe"}</strong>
           {botVoice.speaking && <span>Bot en train de parler...</span>}
+          {audio.botListening && <span>Bot ecoute</span>}
         </div>
         <div className="actions-row audio-actions">
           <button disabled={botVoice.enabled} onClick={botVoice.enable}><Volume2 size={17} /> Activer le son</button>
@@ -1548,7 +1604,7 @@ function AudioPanel({ view, audio, botVoice }: { view: RoomView; audio: ReturnTy
         <>
           <div className="actions-row audio-actions">
             <button disabled={!you.canHearAudio || audio.permission === "requesting"} onClick={audio.enabled ? audio.stopAudio : audio.startAudio}>
-              {audio.enabled ? <MicOff size={17} /> : <Mic size={17} />} {audio.enabled ? "Couper audio" : "Activer mon micro"}
+              {audio.enabled ? <MicOff size={17} /> : <Mic size={17} />} {audio.enabled ? "Couper le micro" : "Activer le micro"}
             </button>
             <button disabled={!you.canHearAudio || !audio.enabled} onClick={() => socket.emit("setMuted", { code: view.code, playerId: you.id, muted: !muted })}>
               {muted ? <MicOff size={17} /> : <Mic size={17} />} {muted ? "Unmute" : "Mute"}
@@ -1662,7 +1718,7 @@ function audioStatusText(audio: ReturnType<typeof useIntegratedAudio>, muted: bo
   if (audio.permission === "denied") return "Micro refuse par le navigateur.";
   if (!audio.enabled) return "Le micro n'est pas connecte.";
   if (muted || !canSpeak) return "Micro connecte, parole coupee par les regles.";
-  return `Micro ouvert. Pairs audio : ${audio.activePeers}.`;
+  return `Micro actif. Pairs audio : ${audio.activePeers}.`;
 }
 
 function botVoiceRate(name: string) {

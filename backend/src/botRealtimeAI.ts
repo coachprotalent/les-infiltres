@@ -81,6 +81,9 @@ export class BotRealtimeAIService {
   readonly reasoningEnabled: boolean;
   readonly reasoningConfigured: boolean;
   readonly autoSpeakEnabled: boolean;
+  readonly voiceVariationEnabled: boolean;
+  readonly defaultVoice: string;
+  readonly availableVoices: string[];
   readonly speakCooldownSeconds: number;
   readonly maxMessagesPerMinute: number;
   readonly maxPerRoom: number;
@@ -94,6 +97,10 @@ export class BotRealtimeAIService {
   private readonly reasoningApiKey: string;
   private readonly reasoningApiVersion: string;
   private readonly reasoningDeployment: string;
+  private readonly transcriptionEndpoint: string;
+  private readonly transcriptionApiKey: string;
+  private readonly transcriptionApiVersion: string;
+  private readonly transcriptionDeployment: string;
   private readonly maxReasoningTokens: number;
   private readonly responseStyle: string;
   private readonly personalityVariation: boolean;
@@ -109,6 +116,10 @@ export class BotRealtimeAIService {
     this.reasoningApiKey = env.AZURE_OPENAI_REASONING_API_KEY ?? "";
     this.reasoningApiVersion = env.AZURE_OPENAI_REASONING_API_VERSION || "2025-01-01-preview";
     this.reasoningDeployment = env.AZURE_OPENAI_REASONING_DEPLOYMENT || "gpt5.4";
+    this.transcriptionEndpoint = (env.AZURE_OPENAI_TRANSCRIPTION_ENDPOINT ?? "").replace(/\/+$/, "");
+    this.transcriptionApiKey = env.AZURE_OPENAI_TRANSCRIPTION_API_KEY ?? "";
+    this.transcriptionApiVersion = env.AZURE_OPENAI_TRANSCRIPTION_API_VERSION || "2025-01-01-preview";
+    this.transcriptionDeployment = env.AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT || "";
     this.enabled = (env.BOT_AI_ENABLED ?? "false").toLowerCase() === "true";
     this.configured = !!this.realtimeEndpoint && !!this.realtimeApiKey;
     this.reasoningEnabled = (env.BOT_REASONING_ENABLED ?? "true").toLowerCase() === "true";
@@ -120,6 +131,12 @@ export class BotRealtimeAIService {
     this.responseStyle = env.BOT_RESPONSE_STYLE || "advanced";
     this.personalityVariation = (env.BOT_PERSONALITY_VARIATION ?? "true").toLowerCase() === "true";
     this.autoSpeakEnabled = (env.BOT_AUTO_SPEAK_ENABLED ?? "true").toLowerCase() === "true";
+    this.voiceVariationEnabled = (env.BOT_VOICE_VARIATION_ENABLED ?? "true").toLowerCase() === "true";
+    this.defaultVoice = env.BOT_DEFAULT_VOICE || "alloy";
+    this.availableVoices = (env.BOT_AVAILABLE_VOICES || "alloy,ash,ballad,coral,echo,onyx,nova,sage,shimmer,verse")
+      .split(",")
+      .map((voice) => voice.trim())
+      .filter(Boolean);
     this.speakCooldownSeconds = clampInt(Number(env.BOT_SPEAK_COOLDOWN_SECONDS ?? 20), 5, 300, 20);
     this.maxMessagesPerMinute = clampInt(Number(env.BOT_MAX_MESSAGES_PER_MINUTE ?? 2), 1, 10, 2);
     this.timeoutMs = clampInt(Number(env.BOT_AI_TIMEOUT_MS ?? 12000), 3000, 60000, 12000);
@@ -302,6 +319,8 @@ export class BotRealtimeAIService {
     console.log(`[BotAI] enabled=${this.enabled} realtimeConfigured=${this.configured} reasoningConfigured=${this.reasoningConfigured} audio=${this.audioEnabled} realtimeDeployment=${this.realtimeDeployment} reasoningDeployment=${this.reasoningDeployment}`);
     console.log(`[BotAI] realtimeEndpoint=${this.realtimeEndpoint ? "present" : "absent"} realtimeApiKey=${this.realtimeApiKey ? "present" : "absent"} realtimeApiVersion=${this.realtimeApiVersion}`);
     console.log(`[BotAI] reasoningEndpoint=${this.reasoningEndpoint ? "present" : "absent"} reasoningApiKey=${this.reasoningApiKey ? "present" : "absent"} reasoningApiVersion=${this.reasoningApiVersion}`);
+    console.log(`[BotAI] transcriptionEndpoint=${this.transcriptionEndpoint ? "present" : "absent"} transcriptionApiKey=${this.transcriptionApiKey ? "present" : "absent"} transcriptionDeployment=${this.transcriptionDeployment || "absent"} transcriptionApiVersion=${this.transcriptionApiVersion}`);
+    console.log(`[BotAI] voices variation=${this.voiceVariationEnabled} default=${this.defaultVoice} available=${this.availableVoices.join(",")}`);
   }
 }
 

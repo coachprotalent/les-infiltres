@@ -33,6 +33,14 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, name: "les-infiltres", botAi: store.botSettings().botAi });
 });
 
+app.post("/api/rooms/:roomCode/finish-defense", (req, res) => {
+  const participantId = typeof req.body?.participantId === "string" ? req.body.participantId : "";
+  if (!participantId) return res.status(400).json({ ok: false, error: "participantId requis." });
+  const ok = store.finishDefense(req.params.roomCode, participantId);
+  if (!ok) return res.status(409).json({ ok: false, error: "Defense introuvable ou deja terminee." });
+  res.json({ ok: true });
+});
+
 const publicDir = path.resolve(__dirname, "../../frontend/dist");
 app.use(express.static(publicDir));
 app.get("*", (_req, res) => {
@@ -125,6 +133,7 @@ io.on("connection", (socket) => {
   socket.on("startDebate", ({ code, seconds }) => store.startDebate(code, socket.id, seconds));
   socket.on("grantSpeech", ({ code, playerId, seconds }) => store.grantSpeech(code, socket.id, playerId, seconds));
   socket.on("stopSpeech", ({ code }) => store.stopSpeech(code, socket.id));
+  socket.on("finishDefense", ({ code, participantId }) => store.finishDefense(code, participantId, socket.id));
   socket.on("closeDebate", ({ code }) => store.closeDebate(code, socket.id));
   socket.on("nominate", ({ code, targetId }) => store.nominate(code, socket.id, targetId));
   socket.on("requestDefense", ({ code }) => store.requestDefense(code, socket.id));
@@ -134,6 +143,7 @@ io.on("connection", (socket) => {
   socket.on("sendChat", ({ code, text }) => store.sendChat(code, socket.id, text));
   socket.on("setMuted", ({ code, playerId, muted }) => store.setMuted(code, socket.id, playerId, muted));
   socket.on("audioActivity", ({ code, speaking }) => store.audioActivity(code, socket.id, speaking));
+  socket.on("audioTranscript", ({ code, text }) => store.audioTranscript(code, socket.id, text));
   socket.on("rtcSignal", ({ code, to, signal }) => {
     const fromView = store.viewBySocket(code, socket.id);
     if (!fromView?.you) return;

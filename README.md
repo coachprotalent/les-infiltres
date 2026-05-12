@@ -136,6 +136,12 @@ AZURE_OPENAI_REASONING_API_KEY=
 AZURE_OPENAI_REASONING_DEPLOYMENT=gpt5.4
 AZURE_OPENAI_REASONING_API_VERSION=2025-01-01-preview
 
+# Transcription optionnelle si l'ecoute audio est separee du realtime.
+AZURE_OPENAI_TRANSCRIPTION_ENDPOINT=https://my-resource.openai.azure.com/
+AZURE_OPENAI_TRANSCRIPTION_API_KEY=
+AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT=gpt-4o-transcribe
+AZURE_OPENAI_TRANSCRIPTION_API_VERSION=2025-01-01-preview
+
 # Active les bots IA.
 BOT_AI_ENABLED=true
 
@@ -171,6 +177,9 @@ BOT_REASONING_ENABLED=true
 BOT_MAX_REASONING_TOKENS=1200
 BOT_RESPONSE_STYLE=advanced
 BOT_PERSONALITY_VARIATION=true
+BOT_VOICE_VARIATION_ENABLED=true
+BOT_DEFAULT_VOICE=alloy
+BOT_AVAILABLE_VOICES=alloy,ash,ballad,coral,echo,onyx,nova,sage,shimmer,verse
 BOT_AUTO_SPEAK_ENABLED=true
 BOT_SPEAK_COOLDOWN_SECONDS=20
 BOT_MAX_MESSAGES_PER_MINUTE=2
@@ -194,6 +203,10 @@ BOT_MAX_MESSAGES_PER_MINUTE=2
 | `AZURE_OPENAI_REASONING_API_KEY` | Oui pour réflexion avancée | Clé API du modèle reasoning. | vide dans l'exemple | Reste uniquement côté serveur. |
 | `AZURE_OPENAI_REASONING_DEPLOYMENT` | Oui pour réflexion avancée | Nom du déploiement reasoning. | `gpt5.4` | Produit les décisions profondes/personnalisées. |
 | `AZURE_OPENAI_REASONING_API_VERSION` | Oui pour réflexion avancée | Version API du modèle reasoning. | `2025-01-01-preview` | Utilisée sur `/chat/completions`. |
+| `AZURE_OPENAI_TRANSCRIPTION_ENDPOINT` | Optionnel | Endpoint transcription si l'écoute est séparée du realtime. | `https://my-resource.openai.azure.com/` | Prévu pour `gpt-4o-transcribe` ou équivalent Azure. |
+| `AZURE_OPENAI_TRANSCRIPTION_API_KEY` | Optionnel | Clé API transcription. | vide | Reste côté serveur. |
+| `AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT` | Optionnel | Déploiement transcription. | `gpt-4o-transcribe` | Le navigateur peut aussi fournir une transcription locale quand disponible. |
+| `AZURE_OPENAI_TRANSCRIPTION_API_VERSION` | Optionnel | Version API transcription. | `2025-01-01-preview` | Réservée au pipeline audio serveur. |
 | `BOT_AI_ENABLED` | Oui | Active ou désactive les bots IA. | `true` | Si `false`, les contrôles IA sont masqués. Azure manquant déclenche le fallback serveur. |
 | `BOT_MAX_PER_ROOM` | Oui | Limite de bots par salon. | `6` | Empêche de remplir une partie avec trop de bots. |
 | `BOT_DEFAULT_COUNT` | Optionnel | Nombre de bots par défaut dans une room. | `1` | L'interface peut le modifier par salon. |
@@ -208,6 +221,9 @@ BOT_MAX_MESSAGES_PER_MINUTE=2
 | `BOT_MAX_REASONING_TOKENS` | Optionnel | Budget de sortie reasoning. | `1200` | Permet des réponses plus développées sans bloquer la partie. |
 | `BOT_RESPONSE_STYLE` | Optionnel | Style de réponse attendu. | `advanced` | Guide le prompt système. |
 | `BOT_PERSONALITY_VARIATION` | Optionnel | Active les profils distincts par bot. | `true` | Les bots reçoivent rôle, tempérament, humour, suspicion, défense, accusation/calme. |
+| `BOT_VOICE_VARIATION_ENABLED` | Optionnel | Active une voix stable et différente par bot. | `true` | Les profils associent par exemple Myriam=`alloy`, Daniel=`onyx`, Sarah=`nova`. |
+| `BOT_DEFAULT_VOICE` | Optionnel | Voix fallback. | `alloy` | Utilisée si la variation est désactivée ou si la voix demandée manque. |
+| `BOT_AVAILABLE_VOICES` | Optionnel | Liste des voix disponibles du modèle realtime. | `alloy,ash,...` | Permet d'éviter d'attribuer une voix non supportée. |
 | `BOT_AUTO_SPEAK_ENABLED` | Optionnel | Autorise les prises de parole non limitées aux tags. | `true` | Déclenche sur mention, accusation, contradiction ou silence. |
 | `BOT_SPEAK_COOLDOWN_SECONDS` | Optionnel | Cooldown de parole par bot. | `20` | Limite le spam. |
 | `BOT_MAX_MESSAGES_PER_MINUTE` | Optionnel | Maximum de messages par bot et par minute. | `2` | Priorise les humains. |

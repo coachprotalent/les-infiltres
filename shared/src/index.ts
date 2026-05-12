@@ -71,6 +71,15 @@ export type BotRoomConfig = {
   allowAudio: boolean;
 };
 
+export type BotVoiceConfig = {
+  voiceName: string;
+  voiceStyle: string;
+  speakingRate: number;
+  pitch: number;
+  volume: number;
+  autoSpeakEnabled: boolean;
+};
+
 export type PowerStatus = {
   key: PowerKey;
   label: string;
@@ -92,6 +101,7 @@ export type PlayerPublic = {
   isHost: boolean;
   isMayor: boolean;
   revealedRole?: Role;
+  botVoice?: BotVoiceConfig;
 };
 
 export type VoteRecord = {
@@ -240,7 +250,7 @@ export type AdminRoomSummary = {
 };
 
 export type AdminRoomDetails = AdminRoomSummary & {
-  players: Pick<PlayerPublic, "id" | "name" | "isBot" | "connected" | "alive" | "isHost" | "isMayor">[];
+  players: Pick<PlayerPublic, "id" | "name" | "isBot" | "connected" | "alive" | "isHost" | "isMayor" | "botVoice">[];
   round: number;
 };
 
@@ -286,6 +296,7 @@ export type ClientToServerEvents = {
   startDebate: (payload: { code: string; seconds?: number }) => void;
   grantSpeech: (payload: { code: string; playerId: string; seconds?: number }) => void;
   stopSpeech: (payload: { code: string }) => void;
+  finishDefense: (payload: { code: string; participantId: string }) => void;
   closeDebate: (payload: { code: string }) => void;
   nominate: (payload: { code: string; targetId: string }) => void;
   requestDefense: (payload: { code: string }) => void;
@@ -295,6 +306,7 @@ export type ClientToServerEvents = {
   sendChat: (payload: { code: string; text: string }) => void;
   setMuted: (payload: { code: string; playerId: string; muted: boolean }) => void;
   audioActivity: (payload: { code: string; speaking: boolean }) => void;
+  audioTranscript: (payload: { code: string; text: string }) => void;
   rtcSignal: (payload: { code: string; to: string; signal: unknown }) => void;
 };
 

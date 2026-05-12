@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { AdminRoomDetails, AdminRoomSummary, AudioMode, BotRoomConfig, ChatMessage, DefenseRequest, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, ServerSettings, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
+import type { AdminRoomDetails, AdminRoomSummary, AudioMode, BotRoomConfig, BotVoiceConfig, ChatMessage, DefenseRequest, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, ServerSettings, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
 import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, mergeBotConfig, mergeConfig } from "@les-infiltres/shared";
 import { BotRealtimeAIService, type BotAIContext, type BotAllowedAction, type BotDecision } from "./botRealtimeAI.js";
 import { NarrationService } from "./narration.js";
@@ -88,6 +88,7 @@ type BotBrain = {
   personality: string;
   temperament: string;
   speakingStyle: string;
+  voice: BotVoiceConfig;
   suspicionLevel: number;
   humorLevel: number;
   defensiveAggression: number;
@@ -117,7 +118,7 @@ const stepRole: Partial<Record<NightStep, Role>> = {
 
 const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const BOT_NAMES = ["Bot Elias", "Bot Naomi", "Bot Caleb", "Bot Myriam", "Bot Samuel", "Bot Esther", "Bot Ruth", "Bot Jonas", "Bot Sarah", "Bot Daniel"];
-type BotProfile = Pick<BotBrain, "role" | "personality" | "temperament" | "speakingStyle" | "suspicionLevel" | "humorLevel" | "defensiveAggression" | "accusationBias" | "calmingBias" | "currentStrategy">;
+type BotProfile = Pick<BotBrain, "role" | "personality" | "temperament" | "speakingStyle" | "voice" | "suspicionLevel" | "humorLevel" | "defensiveAggression" | "accusationBias" | "calmingBias" | "currentStrategy">;
 
 const BOT_PROFILES: Record<string, BotProfile> = {
   "Bot Myriam": {
@@ -125,6 +126,7 @@ const BOT_PROFILES: Record<string, BotProfile> = {
     personality: "calme, analytique, prudente, observatrice",
     temperament: "posee et difficile a provoquer",
     speakingStyle: "parle peu mais avec precision, nuance une hypothese avant d'accuser",
+    voice: { voiceName: "alloy", voiceStyle: "calme, posee", speakingRate: 0.88, pitch: 0.92, volume: 0.9, autoSpeakEnabled: true },
     suspicionLevel: 6,
     humorLevel: 1,
     defensiveAggression: 2,
@@ -137,6 +139,7 @@ const BOT_PROFILES: Record<string, BotProfile> = {
     personality: "strategique, defensif, cherche les incoherences",
     temperament: "mefiant et combatif quand il est vise",
     speakingStyle: "argumente en citant les contradictions et retourne les soupcons trop faciles",
+    voice: { voiceName: "onyx", voiceStyle: "grave, analytique", speakingRate: 0.96, pitch: 0.82, volume: 0.92, autoSpeakEnabled: true },
     suspicionLevel: 8,
     humorLevel: 2,
     defensiveAggression: 8,
@@ -149,6 +152,7 @@ const BOT_PROFILES: Record<string, BotProfile> = {
     personality: "expressive, emotionnelle, rapide a reagir",
     temperament: "vive, spontanee, parfois indignee",
     speakingStyle: "phrases naturelles et energiques, pose vite une question directe",
+    voice: { voiceName: "nova", voiceStyle: "expressive, rapide", speakingRate: 1.05, pitch: 1.16, volume: 0.94, autoSpeakEnabled: true },
     suspicionLevel: 5,
     humorLevel: 5,
     defensiveAggression: 6,
@@ -161,6 +165,7 @@ const BOT_PROFILES: Record<string, BotProfile> = {
     personality: "direct, observateur, suspicieux",
     temperament: "frontal et peu patient",
     speakingStyle: "court, frontal, avec des accusations nettes",
+    voice: { voiceName: "echo", voiceStyle: "directe, tendue", speakingRate: 0.98, pitch: 0.88, volume: 0.93, autoSpeakEnabled: true },
     suspicionLevel: 8,
     humorLevel: 2,
     defensiveAggression: 7,
@@ -173,6 +178,7 @@ const BOT_PROFILES: Record<string, BotProfile> = {
     personality: "intuitive, sociale, attentive aux contradictions",
     temperament: "chaleureuse mais lucide",
     speakingStyle: "naturel, relationnel, cite les incoherences du debat",
+    voice: { voiceName: "shimmer", voiceStyle: "sociale, claire", speakingRate: 0.96, pitch: 1.05, volume: 0.9, autoSpeakEnabled: true },
     suspicionLevel: 5,
     humorLevel: 4,
     defensiveAggression: 3,
@@ -185,6 +191,7 @@ const BOT_PROFILES: Record<string, BotProfile> = {
     personality: "strategique, discret, precis",
     temperament: "reserve et calculateur",
     speakingStyle: "parle peu, mais cible une raison concrete",
+    voice: { voiceName: "ash", voiceStyle: "discrete, precise", speakingRate: 0.9, pitch: 0.9, volume: 0.86, autoSpeakEnabled: true },
     suspicionLevel: 7,
     humorLevel: 1,
     defensiveAggression: 4,
@@ -197,6 +204,7 @@ const BOT_PROFILES: Record<string, BotProfile> = {
     personality: "diplomate, calme, moderateur",
     temperament: "patient et rassembleur",
     speakingStyle: "apaise le debat tout en posant une question utile",
+    voice: { voiceName: "sage", voiceStyle: "calme, mediateur", speakingRate: 0.9, pitch: 0.98, volume: 0.88, autoSpeakEnabled: true },
     suspicionLevel: 4,
     humorLevel: 3,
     defensiveAggression: 2,
@@ -206,9 +214,9 @@ const BOT_PROFILES: Record<string, BotProfile> = {
   }
 };
 const BOT_PROFILE_FALLBACKS = [
-  { role: "analyste", personality: "methodique, prudent, factuel", temperament: "stable", speakingStyle: "liste un indice et une conclusion simple", suspicionLevel: 5, humorLevel: 1, defensiveAggression: 3, accusationBias: 4, calmingBias: 5, currentStrategy: "suivre les votes publics" },
-  { role: "enqueteur social", personality: "social, curieux, peu agressif", temperament: "ouvert", speakingStyle: "pose des questions courtes", suspicionLevel: 4, humorLevel: 4, defensiveAggression: 2, accusationBias: 3, calmingBias: 7, currentStrategy: "faire clarifier les silences" },
-  { role: "competiteur", personality: "mefiant, rapide, competitif", temperament: "nerveux", speakingStyle: "phrases breves avec un soupcon explicite", suspicionLevel: 7, humorLevel: 2, defensiveAggression: 6, accusationBias: 7, calmingBias: 2, currentStrategy: "tester les defenses faibles" }
+  { role: "analyste", personality: "methodique, prudent, factuel", temperament: "stable", speakingStyle: "liste un indice et une conclusion simple", voice: { voiceName: "coral", voiceStyle: "factuelle", speakingRate: 0.92, pitch: 0.98, volume: 0.88, autoSpeakEnabled: true }, suspicionLevel: 5, humorLevel: 1, defensiveAggression: 3, accusationBias: 4, calmingBias: 5, currentStrategy: "suivre les votes publics" },
+  { role: "enqueteur social", personality: "social, curieux, peu agressif", temperament: "ouvert", speakingStyle: "pose des questions courtes", voice: { voiceName: "verse", voiceStyle: "curieuse", speakingRate: 0.96, pitch: 1.02, volume: 0.88, autoSpeakEnabled: true }, suspicionLevel: 4, humorLevel: 4, defensiveAggression: 2, accusationBias: 3, calmingBias: 7, currentStrategy: "faire clarifier les silences" },
+  { role: "competiteur", personality: "mefiant, rapide, competitif", temperament: "nerveux", speakingStyle: "phrases breves avec un soupcon explicite", voice: { voiceName: "ballad", voiceStyle: "vive", speakingRate: 1.02, pitch: 0.94, volume: 0.92, autoSpeakEnabled: true }, suspicionLevel: 7, humorLevel: 2, defensiveAggression: 6, accusationBias: 7, calmingBias: 2, currentStrategy: "tester les defenses faibles" }
 ] satisfies BotProfile[];
 
 export class GameStore {
@@ -299,7 +307,8 @@ export class GameStore {
         connected: player.connected,
         alive: player.alive,
         isHost: player.id === room.hostId,
-        isMayor: player.id === room.mayorId
+        isMayor: player.id === room.mayorId,
+        botVoice: player.isBot ? this.ensureBotBrain(room, player).voice : undefined
       })),
       botAi: {
         enabled: this.botAi.enabled,
@@ -899,7 +908,47 @@ export class GameStore {
     const next = speaking && canSpeakNow;
     if (player.audioActive === next) return;
     player.audioActive = next;
+    if (next) console.log(`[Audio] audio input received: ${player.name}`);
     this.emit(room);
+  }
+
+  audioTranscript(code: string, actorSocketId: string, text: string) {
+    const room = this.getRoom(code);
+    const actor = room?.players.find((p) => p.socketId === actorSocketId);
+    const clean = text.trim().replace(/\s+/g, " ").slice(0, 280);
+    if (!room || !actor || !clean || actor.isBot) return;
+    if (!canSendChat(actor, room)) return;
+    console.log(`[Audio] transcription received: ${actor.name}: ${clean}`);
+    const message = this.addChatMessage(room, actor, `(oral) ${clean}`, chatScopeFor(actor, room));
+    if (message) {
+      this.updateBotMemoryFromMessage(room, message);
+      this.scheduleContextualBotReplies(room, message);
+      this.emit(room);
+    }
+  }
+
+  finishDefense(code: string, participantId: string, actorSocketId?: string) {
+    const room = this.getRoom(code);
+    const actor = actorSocketId ? room?.players.find((p) => p.socketId === actorSocketId) : undefined;
+    const participant = room?.players.find((p) => p.id === participantId);
+    if (!room || !participant) {
+      if (actorSocketId) this.reject(actorSocketId, "Partie introuvable.");
+      return false;
+    }
+    if (room.phase !== "DEFENSE" || !participant.speaking) {
+      if (actorSocketId) this.reject(actorSocketId, "Aucune defense active pour ce joueur.");
+      return false;
+    }
+    if (actorSocketId && actor?.id !== participant.id && actor?.id !== room.mayorId) {
+      this.reject(actorSocketId, "Seul le joueur qui se defend ou le Maire peut terminer cette defense.");
+      return false;
+    }
+    const request = room.defenseRequests.find((item) => item.playerId === participant.id && item.status === "granted");
+    if (request) request.status = "done";
+    room.narrator = `${participant.name} a termine sa defense.`;
+    this.log(room, "phase", `${participant.name} a termine sa defense.`);
+    this.completeDefense(room, true);
+    return true;
   }
 
   views(code: string): Array<{ socketId: string; view: RoomView }> {
@@ -1018,13 +1067,16 @@ export class GameStore {
     this.startTimedPhase(room, "VOTING", seconds ?? room.config.durations.vote, NarrationService.fallback({ type: "vote", phase: "VOTING", round: room.round }, "Vote ouvert parmi les joueurs nomines. Les choix sont publics, les voix se comptent devant tous."));
   }
 
-  private completeDefense(room: Room) {
+  private completeDefense(room: Room, alreadyMarked = false) {
     this.clearTimer(room);
     const speaker = room.players.find((p) => p.speaking);
     if (speaker) {
       const request = room.defenseRequests.find((item) => item.playerId === speaker.id && item.status === "granted");
       if (request) request.status = "done";
-      this.log(room, "phase", `Defense terminee pour ${speaker.name}.`);
+      if (!alreadyMarked) {
+        room.narrator = `${speaker.name} a termine sa defense.`;
+        this.log(room, "phase", `Defense terminee pour ${speaker.name}.`);
+      }
     }
     room.players.forEach((p) => {
       p.speaking = false;
@@ -1034,7 +1086,7 @@ export class GameStore {
     });
     if (shouldAutoVoteAfterDefenseRequests(room)) return this.startVoteFromDefenseRequests(room);
     room.phase = "DEFENSE_REQUESTS";
-    room.narrator = "Defense terminee. Le Maire peut traiter les autres demandes ou passer au vote.";
+    if (!alreadyMarked) room.narrator = "Defense terminee. Le Maire peut traiter les autres demandes ou passer au vote.";
     this.emit(room);
   }
 
@@ -1382,6 +1434,7 @@ export class GameStore {
       personality: profile.personality,
       temperament: profile.temperament,
       speakingStyle: profile.speakingStyle,
+      voice: this.resolveBotVoice(room, profile),
       suspicionLevel: profile.suspicionLevel,
       humorLevel: profile.humorLevel,
       defensiveAggression: profile.defensiveAggression,
@@ -1397,7 +1450,18 @@ export class GameStore {
       speechTimestamps: []
     };
     room.botBrains.set(bot.id, brain);
+    console.log(`[BotAI] bot selected voice: ${bot.name} voice=${brain.voice.voiceName} style=${brain.voice.voiceStyle}`);
     return brain;
+  }
+
+  private resolveBotVoice(room: Room, profile: BotProfile): BotVoiceConfig {
+    if (!this.botAi.voiceVariationEnabled) return { ...profile.voice, voiceName: this.botAi.defaultVoice };
+    const used = new Set([...room.botBrains.values()].map((brain) => brain.voice.voiceName));
+    const preferred = profile.voice.voiceName;
+    const voiceName = !used.has(preferred) && this.botAi.availableVoices.includes(preferred)
+      ? preferred
+      : this.botAi.availableVoices.find((voice) => !used.has(voice)) ?? this.botAi.defaultVoice;
+    return { ...profile.voice, voiceName, autoSpeakEnabled: profile.voice.autoSpeakEnabled && this.botAi.autoSpeakEnabled };
   }
 
   private scheduleBotTurns(room: Room) {
@@ -1550,6 +1614,7 @@ export class GameStore {
   private canBotAutoSpeak(room: Room, bot: Player) {
     if (!this.botAi.autoSpeakEnabled || !room.botConfig.allowDebateSpeech || !canSendChat(bot, room)) return false;
     const brain = this.ensureBotBrain(room, bot);
+    if (!brain.voice.autoSpeakEnabled) return false;
     const now = Date.now();
     brain.speechTimestamps = brain.speechTimestamps.filter((at) => now - at < 60_000);
     return now - brain.lastSpokeAt >= this.botAi.speakCooldownSeconds * 1000 && brain.speechTimestamps.length < this.botAi.maxMessagesPerMinute;
@@ -2180,8 +2245,8 @@ function createBotPlayer(name: string): Player {
 
 function publicPlayer(player: Player, room: Room, activeStep?: NightStep, viewer?: Player): PlayerPublic {
   const neutralizeNightAudio = activeStep === "infiltres" && !canSeeNightAudioState(viewer, player, room);
-  return {
-    id: player.id,
+    return {
+      id: player.id,
     name: player.name,
     isBot: player.isBot,
     connected: player.connected,
@@ -2194,7 +2259,8 @@ function publicPlayer(player: Player, room: Room, activeStep?: NightStep, viewer
     audioActive: neutralizeNightAudio ? false : player.audioActive,
     isHost: player.isHost,
     isMayor: player.id === room.mayorId,
-    revealedRole: player.revealedRole
+    revealedRole: player.revealedRole,
+    botVoice: player.isBot ? room.botBrains.get(player.id)?.voice : undefined
   };
 }
 
