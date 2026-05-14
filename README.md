@@ -118,17 +118,29 @@ CLIENT_URL=https://infiltre-dev.traillearn.org
 ADMIN_USERNAME=aubinaso
 ADMIN_PASSWORD=change-me
 
-# Endpoint Azure OpenAI de la ressource realtime.
-AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
+# Endpoint Azure OpenAI de la ressource realtime / voix.
+AZURE_OPENAI_REALTIME_ENDPOINT=https://my-resource.openai.azure.com/
 
-# Cle API Azure OpenAI cote serveur.
-AZURE_OPENAI_API_KEY=
+# Cle API Azure OpenAI realtime cote serveur.
+AZURE_OPENAI_REALTIME_API_KEY=
 
-# Version API Azure OpenAI utilisee.
-AZURE_OPENAI_API_VERSION=2024-10-01-preview
+# Version API Azure OpenAI realtime utilisee.
+AZURE_OPENAI_REALTIME_API_VERSION=2024-10-01-preview
 
 # Nom exact du deploiement realtime Azure.
 AZURE_OPENAI_REALTIME_DEPLOYMENT=gpt-realtime-1.5
+
+# Modele de reflexion avancee des bots.
+AZURE_OPENAI_REASONING_ENDPOINT=https://my-resource.openai.azure.com/
+AZURE_OPENAI_REASONING_API_KEY=
+AZURE_OPENAI_REASONING_DEPLOYMENT=gpt5.4
+AZURE_OPENAI_REASONING_API_VERSION=2025-01-01-preview
+
+# Transcription optionnelle si l'ecoute audio est separee du realtime.
+AZURE_OPENAI_TRANSCRIPTION_ENDPOINT=https://my-resource.openai.azure.com/
+AZURE_OPENAI_TRANSCRIPTION_API_KEY=
+AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT=gpt-4o-transcribe
+AZURE_OPENAI_TRANSCRIPTION_API_VERSION=2025-01-01-preview
 
 # Active les bots IA.
 BOT_AI_ENABLED=true
@@ -136,11 +148,41 @@ BOT_AI_ENABLED=true
 # Nombre maximum de bots par salon.
 BOT_MAX_PER_ROOM=6
 
+# Nombre de bots par defaut dans un salon.
+BOT_DEFAULT_COUNT=1
+
+# Complete automatiquement le lobby avec des bots.
+BOT_AUTO_FILL_ENABLED=false
+
 # Niveau de participation: discreet | normal | talkative.
 BOT_DEFAULT_PARTICIPATION=normal
 
+# Temps moyen de reponse des bots en millisecondes.
+BOT_AVERAGE_RESPONSE_MS=1500
+
+# Autorise les bots a devenir Maire.
+BOT_ALLOW_MAYOR=true
+
+# Autorise les bots a parler pendant les debats.
+BOT_ALLOW_DEBATE_SPEECH=true
+
 # Active les voix audio IA des bots. false = texte uniquement.
 BOT_AUDIO_ENABLED=false
+
+# Autorise les bots a utiliser l'audio integre.
+BOT_ALLOW_AUDIO=false
+
+# Reflexion, style et prise de parole automatique.
+BOT_REASONING_ENABLED=true
+BOT_MAX_REASONING_TOKENS=1200
+BOT_RESPONSE_STYLE=advanced
+BOT_PERSONALITY_VARIATION=true
+BOT_VOICE_VARIATION_ENABLED=true
+BOT_DEFAULT_VOICE=alloy
+BOT_AVAILABLE_VOICES=alloy,ash,ballad,coral,echo,onyx,nova,sage,shimmer,verse
+BOT_AUTO_SPEAK_ENABLED=true
+BOT_SPEAK_COOLDOWN_SECONDS=20
+BOT_MAX_MESSAGES_PER_MINUTE=2
 ```
 
 | Variable | Obligatoire | Rôle | Exemple | Comportement attendu |
@@ -153,14 +195,38 @@ BOT_AUDIO_ENABLED=false
 | `CLIENT_URL` | Optionnel | Fallback frontend si `CORS_ORIGIN` manque. | `http://localhost:5173` | Utile surtout en développement local. |
 | `ADMIN_USERNAME` | Oui | Identifiant admin. | `aubinaso` | Requis pour accéder au dashboard admin. |
 | `ADMIN_PASSWORD` | Oui | Mot de passe admin. | `change-me` | À remplacer avant tout déploiement public. |
-| `AZURE_OPENAI_ENDPOINT` | Oui pour bots IA | Endpoint de la ressource Azure OpenAI qui contient le déploiement realtime. | `https://my-resource.openai.azure.com/` | Le backend construit l'URL realtime à partir de cet endpoint. |
-| `AZURE_OPENAI_API_KEY` | Oui pour bots IA | Clé API Azure OpenAI. | vide dans l'exemple | Reste uniquement côté serveur. Ne jamais l'exposer au frontend. |
-| `AZURE_OPENAI_API_VERSION` | Oui pour endpoint preview | Version API realtime Azure. | `2024-10-01-preview` | Le service essaie le format realtime preview et le format GA si nécessaire. |
+| `AZURE_OPENAI_REALTIME_ENDPOINT` | Oui pour voix/realtime | Endpoint de la ressource Azure OpenAI qui contient le déploiement realtime. | `https://my-resource.openai.azure.com/` | Le backend construit l'URL realtime à partir de cet endpoint. Les anciennes variables `AZURE_OPENAI_ENDPOINT/API_KEY/API_VERSION` restent acceptées en fallback. |
+| `AZURE_OPENAI_REALTIME_API_KEY` | Oui pour voix/realtime | Clé API Azure OpenAI realtime. | vide dans l'exemple | Reste uniquement côté serveur. Ne jamais l'exposer au frontend. |
+| `AZURE_OPENAI_REALTIME_API_VERSION` | Oui pour endpoint preview | Version API realtime Azure. | `2024-10-01-preview` | Le service essaie le format realtime preview et le format GA si nécessaire. |
 | `AZURE_OPENAI_REALTIME_DEPLOYMENT` | Oui pour bots IA | Nom exact du déploiement realtime utilisé par les bots. | `gpt-realtime-1.5` | C'est le modèle principal des bots. `AZURE_OPENAI_DEPLOYMENT` n'est pas utilisé pour eux. |
-| `BOT_AI_ENABLED` | Oui | Active ou désactive les bots IA. | `true` | Si `false` ou si Azure manque, les contrôles IA sont désactivés. |
+| `AZURE_OPENAI_REASONING_ENDPOINT` | Oui pour réflexion avancée | Endpoint de la ressource Azure OpenAI qui contient le modèle de raisonnement. | `https://my-resource.openai.azure.com/` | Utilisé avant le realtime pour produire l'intention et le message. |
+| `AZURE_OPENAI_REASONING_API_KEY` | Oui pour réflexion avancée | Clé API du modèle reasoning. | vide dans l'exemple | Reste uniquement côté serveur. |
+| `AZURE_OPENAI_REASONING_DEPLOYMENT` | Oui pour réflexion avancée | Nom du déploiement reasoning. | `gpt5.4` | Produit les décisions profondes/personnalisées. |
+| `AZURE_OPENAI_REASONING_API_VERSION` | Oui pour réflexion avancée | Version API du modèle reasoning. | `2025-01-01-preview` | Utilisée sur `/chat/completions`. |
+| `AZURE_OPENAI_TRANSCRIPTION_ENDPOINT` | Optionnel | Endpoint transcription si l'écoute est séparée du realtime. | `https://my-resource.openai.azure.com/` | Prévu pour `gpt-4o-transcribe` ou équivalent Azure. |
+| `AZURE_OPENAI_TRANSCRIPTION_API_KEY` | Optionnel | Clé API transcription. | vide | Reste côté serveur. |
+| `AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT` | Optionnel | Déploiement transcription. | `gpt-4o-transcribe` | Le navigateur peut aussi fournir une transcription locale quand disponible. |
+| `AZURE_OPENAI_TRANSCRIPTION_API_VERSION` | Optionnel | Version API transcription. | `2025-01-01-preview` | Réservée au pipeline audio serveur. |
+| `BOT_AI_ENABLED` | Oui | Active ou désactive les bots IA. | `true` | Si `false`, les contrôles IA sont masqués. Azure manquant déclenche le fallback serveur. |
 | `BOT_MAX_PER_ROOM` | Oui | Limite de bots par salon. | `6` | Empêche de remplir une partie avec trop de bots. |
+| `BOT_DEFAULT_COUNT` | Optionnel | Nombre de bots par défaut dans une room. | `1` | L'interface peut le modifier par salon. |
+| `BOT_AUTO_FILL_ENABLED` | Optionnel | Complète automatiquement le lobby avec des bots. | `false` | Si activé, le serveur maintient assez de bots pour atteindre le minimum de joueurs. |
 | `BOT_DEFAULT_PARTICIPATION` | Optionnel | Niveau de prise de parole. | `normal` | Valeurs: `discreet`, `normal`, `talkative`. |
+| `BOT_AVERAGE_RESPONSE_MS` | Optionnel | Temps moyen avant action d'un bot. | `1500` | Sert de défaut; chaque salon peut le surcharger. |
+| `BOT_ALLOW_MAYOR` | Optionnel | Autorise les bots à devenir Maire. | `true` | Si `false`, les bots ne peuvent pas être nominés ni élus Maire. |
+| `BOT_ALLOW_DEBATE_SPEECH` | Optionnel | Autorise les bots à parler en débat. | `true` | Si `false`, ils continuent de voter, nominer et agir la nuit. |
 | `BOT_AUDIO_ENABLED` | Oui | Active la future voix IA. | `false` | `false` garde les bots actifs en texte: chat, nominations, votes et actions de nuit. |
+| `BOT_ALLOW_AUDIO` | Optionnel | Autorise les bots à utiliser l'audio intégré. | `false` | Prépare la voix IA future; le MVP reste texte si `BOT_AUDIO_ENABLED=false`. |
+| `BOT_REASONING_ENABLED` | Optionnel | Active la couche reasoning quand elle est configurée. | `true` | Si absent ou non configuré, le service retombe sur realtime/fallback. |
+| `BOT_MAX_REASONING_TOKENS` | Optionnel | Budget de sortie reasoning. | `1200` | Permet des réponses plus développées sans bloquer la partie. |
+| `BOT_RESPONSE_STYLE` | Optionnel | Style de réponse attendu. | `advanced` | Guide le prompt système. |
+| `BOT_PERSONALITY_VARIATION` | Optionnel | Active les profils distincts par bot. | `true` | Les bots reçoivent rôle, tempérament, humour, suspicion, défense, accusation/calme. |
+| `BOT_VOICE_VARIATION_ENABLED` | Optionnel | Active une voix stable et différente par bot. | `true` | Les profils associent par exemple Myriam=`alloy`, Daniel=`onyx`, Sarah=`nova`. |
+| `BOT_DEFAULT_VOICE` | Optionnel | Voix fallback. | `alloy` | Utilisée si la variation est désactivée ou si la voix demandée manque. |
+| `BOT_AVAILABLE_VOICES` | Optionnel | Liste des voix disponibles du modèle realtime. | `alloy,ash,...` | Permet d'éviter d'attribuer une voix non supportée. |
+| `BOT_AUTO_SPEAK_ENABLED` | Optionnel | Autorise les prises de parole non limitées aux tags. | `true` | Déclenche sur mention, accusation, contradiction ou silence. |
+| `BOT_SPEAK_COOLDOWN_SECONDS` | Optionnel | Cooldown de parole par bot. | `20` | Limite le spam. |
+| `BOT_MAX_MESSAGES_PER_MINUTE` | Optionnel | Maximum de messages par bot et par minute. | `2` | Priorise les humains. |
 | `BOT_AI_TIMEOUT_MS` | Optionnel | Timeout d'une décision Azure. | `12000` | Si Azure ne répond pas, le bot passe son tour et la partie continue. |
 
 Le frontend n'utilise pas de variable Vite actuellement. En production, il se connecte au backend par la même origine que la page servie.
@@ -175,19 +241,46 @@ Le service dédié est `BotRealtimeAIService`. Il centralise la communication Az
 
 Même avec `BOT_AUDIO_ENABLED=false`, les bots fonctionnent normalement en texte : ils parlent dans le chat, participent aux débats, nominent, votent, agissent la nuit, reçoivent leur rôle et peuvent devenir Maire.
 
+### Configuration des Bots IA dans l'interface
+
+Les valeurs `.env` sont les valeurs par défaut serveur. Dans l'écran de création et dans le lobby, l'hôte peut les surcharger par salon dans la section **Configuration des Bots IA** :
+
+- activer ou désactiver les bots IA pour le salon ;
+- choisir le nombre de bots ;
+- compléter automatiquement la room avec des bots ;
+- choisir la participation `discret`, `normal` ou `talkative` ;
+- activer ou désactiver la voix IA ;
+- régler le temps de réponse moyen ;
+- autoriser ou non les bots à devenir Maire ;
+- autoriser ou non les bots à parler pendant les débats ;
+- autoriser ou non les bots à utiliser l'audio.
+
+Si `BOT_AI_ENABLED=false` côté serveur, toute la section bots est masquée dans l'interface. Si Azure OpenAI est indisponible mais que `BOT_AI_ENABLED=true`, les bots restent jouables grâce au fallback serveur : ils peuvent parler avec des phrases simples, nominer, voter et agir la nuit sans bloquer la partie.
+
+### Personnalité et mémoire des bots
+
+Tous les bots utilisent le même déploiement Azure `AZURE_OPENAI_REALTIME_DEPLOYMENT`, mais chaque bot possède un état logique séparé côté backend : personnalité, style de parole, mémoire récente, messages vus, connaissances privées autorisées, stratégie courante et niveau de suspicion par joueur.
+
+Les bots lisent les derniers messages visibles du chat. Si un joueur mentionne un bot par son nom (`Bot Myriam`, `@Bot Myriam`, `Myriam`, etc.), le serveur détecte la mention, donne la priorité à ce bot et affiche temporairement `Bot Myriam reflechit...` dans le chat. Le bot répond seulement s'il est vivant et autorisé à parler dans la phase courante.
+
+Le contexte reste filtré : les personnalités et souvenirs sont ajoutés au contexte du bot, mais les rôles secrets des autres joueurs, l'état complet de la room et les actions privées invisibles ne sont jamais envoyés.
+
 Contexte envoyé au modèle :
 
 ```json
 {
   "botName": "Bot Naomi",
+  "botPersonality": "intuitive, sociale, attentive aux contradictions",
   "botRole": "Infiltre",
   "phase": "DEBATE",
   "publicEvents": [],
   "visibleMessages": [],
+  "lastMessagesAddressedToBot": [],
   "alivePlayers": [],
   "nominatedPlayers": [],
-  "currentVoteState": { "votes": [], "totals": [] },
+  "knownSuspicions": [],
   "privateRoleInfo": [],
+  "currentStrategy": "croiser les reactions sociales et les votes",
   "allowedActions": ["speak", "pass"]
 }
 ```

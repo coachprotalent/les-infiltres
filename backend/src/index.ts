@@ -30,7 +30,15 @@ app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, name: "les-infiltres" });
+  res.json({ ok: true, name: "les-infiltres", botAi: store.botSettings().botAi });
+});
+
+app.post("/api/rooms/:roomCode/finish-defense", (req, res) => {
+  const participantId = typeof req.body?.participantId === "string" ? req.body.participantId : "";
+  if (!participantId) return res.status(400).json({ ok: false, error: "participantId requis." });
+  const ok = store.finishDefense(req.params.roomCode, participantId);
+  if (!ok) return res.status(409).json({ ok: false, error: "Defense introuvable ou deja terminee." });
+  res.json({ ok: true });
 });
 
 const publicDir = path.resolve(__dirname, "../../frontend/dist");
@@ -90,8 +98,12 @@ io.on("connection", (socket) => {
     ack({ ok: true });
   });
 
+  socket.on("getServerSettings", (ack) => {
+    ack(store.botSettings());
+  });
+
   socket.on("createRoom", (payload, ack) => {
-    ack(store.createRoom(payload.name, payload.audioMode, socket.id, payload.sessionId, payload.config));
+    ack(store.createRoom(payload.name, payload.audioMode, socket.id, payload.sessionId, payload.config, payload.botConfig));
   });
 
   socket.on("joinRoom", (payload, ack) => {
@@ -103,6 +115,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("updateConfig", ({ code, config }) => store.updateConfig(code, socket.id, config));
+  socket.on("updateBotConfig", ({ code, botConfig }) => store.updateBotConfig(code, socket.id, botConfig));
   socket.on("updateAudioMode", ({ code, audioMode }) => store.updateAudioMode(code, socket.id, audioMode));
   socket.on("closeRoom", ({ code }) => store.closeRoom(code, socket.id));
   socket.on("leaveRoom", ({ code }) => store.leaveRoom(code, socket.id));
@@ -120,6 +133,7 @@ io.on("connection", (socket) => {
   socket.on("startDebate", ({ code, seconds }) => store.startDebate(code, socket.id, seconds));
   socket.on("grantSpeech", ({ code, playerId, seconds }) => store.grantSpeech(code, socket.id, playerId, seconds));
   socket.on("stopSpeech", ({ code }) => store.stopSpeech(code, socket.id));
+  socket.on("finishDefense", ({ code, participantId }) => store.finishDefense(code, participantId, socket.id));
   socket.on("closeDebate", ({ code }) => store.closeDebate(code, socket.id));
   socket.on("nominate", ({ code, targetId }) => store.nominate(code, socket.id, targetId));
   socket.on("requestDefense", ({ code }) => store.requestDefense(code, socket.id));
@@ -129,6 +143,7 @@ io.on("connection", (socket) => {
   socket.on("sendChat", ({ code, text }) => store.sendChat(code, socket.id, text));
   socket.on("setMuted", ({ code, playerId, muted }) => store.setMuted(code, socket.id, playerId, muted));
   socket.on("audioActivity", ({ code, speaking }) => store.audioActivity(code, socket.id, speaking));
+  socket.on("audioTranscript", ({ code, text }) => store.audioTranscript(code, socket.id, text));
   socket.on("rtcSignal", ({ code, to, signal }) => {
     const fromView = store.viewBySocket(code, socket.id);
     if (!fromView?.you) return;

@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { io, Socket } from "socket.io-client";
-import { ArrowLeft, Clock, Copy, Crown, Eye, Gavel, Lock, LogOut, Mic, MicOff, Moon, Play, RefreshCw, Settings, Shield, Sun, Trash2, Users, Vote } from "lucide-react";
-import type { AdminRoomDetails, AdminRoomSummary, ClientToServerEvents, GameConfig, Role, RoomView, ServerToClientEvents } from "@les-infiltres/shared";
-import { DEFAULT_CONFIG, ROLE_ABILITIES, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLES, mergeConfig } from "@les-infiltres/shared";
+import { ArrowLeft, Clock, Copy, Crown, Eye, Gavel, Lock, LogOut, Mic, MicOff, Moon, Play, RefreshCw, Settings, Shield, Sun, Trash2, Users, Volume2, VolumeX, Vote } from "lucide-react";
+import type { AdminRoomDetails, AdminRoomSummary, BotRoomConfig, ClientToServerEvents, GameConfig, Role, RoomView, ServerSettings, ServerToClientEvents } from "@les-infiltres/shared";
+import { DEFAULT_BOT_CONFIG, DEFAULT_CONFIG, ROLE_ABILITIES, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLES, mergeBotConfig, mergeConfig } from "@les-infiltres/shared";
 import "./styles.css";
 
 type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -13,6 +13,18 @@ type PeerEntry = {
   audio?: HTMLAudioElement;
 };
 type AudioPermission = "idle" | "requesting" | "granted" | "denied" | "missing" | "unsupported";
+type BotAudioStatus = "disabled" | "enabled" | "speaking" | "error";
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((event: { results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null;
+  onerror: ((event: unknown) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 type TimerInfo = {
   label: string;
   secondsLeft: number;
@@ -34,6 +46,8 @@ function App() {
   const [code, setCode] = useState("");
   const [audioMode, setAudioMode] = useState<"integrated" | "external">("external");
   const [config, setConfig] = useState<GameConfig>(DEFAULT_CONFIG);
+  const [serverSettings, setServerSettings] = useState<ServerSettings | null>(null);
+  const [botConfig, setBotConfig] = useState<BotRoomConfig>(DEFAULT_BOT_CONFIG);
   const [adminOpen, setAdminOpen] = useState(false);
 
   useEffect(() => {
@@ -59,6 +73,10 @@ function App() {
         }
       });
     }
+    socket.emit("getServerSettings", (settings) => {
+      setServerSettings(settings);
+      setBotConfig(settings.botAi.defaults);
+    });
     return () => {
       socket.off("roomState");
       socket.off("toast");
@@ -68,7 +86,7 @@ function App() {
 
   const create = () => {
     if (!name.trim()) return setToast("Entre ton nom.");
-    socket.emit("createRoom", { name, audioMode, config, sessionId: localStorage.getItem(sessionKey) ?? undefined }, (next) => {
+    socket.emit("createRoom", { name, audioMode, config, botConfig, sessionId: localStorage.getItem(sessionKey) ?? undefined }, (next) => {
       persist(next);
       setView(next);
     });
@@ -102,6 +120,7 @@ function App() {
             <button className={audioMode === "integrated" ? "selected" : ""} onClick={() => setAudioMode("integrated")}>Audio integre MVP</button>
           </div>
           <ConfigEditor config={config} onChange={setConfig} compact />
+          {serverSettings?.botAi.enabled && <BotConfigEditor config={botConfig} onChange={setBotConfig} maxPerRoom={serverSettings.botAi.maxPerRoom} />}
           <button className="primary" onClick={create}><Play size={18} /> Creer une partie</button>
           <div className="join">
             <input value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="CODE" maxLength={5} />
@@ -240,6 +259,7 @@ function AdminPage({ onBack }: { onBack: () => void }) {
                 <th>Joueurs</th>
                 <th>Statut</th>
                 <th>Audio</th>
+                <th>Bots IA</th>
                 <th>Creation</th>
                 <th>Actions</th>
               </tr>
@@ -252,6 +272,7 @@ function AdminPage({ onBack }: { onBack: () => void }) {
                   <td>{room.connectedPlayers} / {room.playerCount}</td>
                   <td>{adminStatusLabel(room.status)}</td>
                   <td>{room.audioMode === "integrated" ? "integre" : "externe"}</td>
+                  <td>{room.botAi.enabled && room.botAi.config.enabled ? `${room.botAi.config.count}${room.botAi.config.autoFill ? " + auto" : ""}` : "off"}</td>
                   <td>{new Date(room.createdAt).toLocaleString()}</td>
                   <td>
                     <div className="admin-actions">
@@ -263,7 +284,7 @@ function AdminPage({ onBack }: { onBack: () => void }) {
               ))}
               {!rooms.length && (
                 <tr>
-                  <td colSpan={7}>Aucun salon actif.</td>
+                  <td colSpan={8}>Aucun salon actif.</td>
                 </tr>
               )}
             </tbody>
@@ -273,11 +294,12 @@ function AdminPage({ onBack }: { onBack: () => void }) {
           <div className="admin-details">
             <h2>Details du salon {details.code}</h2>
             <p>Phase : {phaseLabel(details.phase)} - Tour {details.round}</p>
+            <p>Bots IA : {details.botAi.enabled && details.botAi.config.enabled ? `actifs, ${details.botAi.config.count} bot(s), participation ${participationLabel(details.botAi.config.participation)}` : "desactives"}</p>
             <div className="players">
               {details.players.map((player) => (
                 <div className={`player ${player.alive ? "" : "out"}`} key={player.id}>
                   <span>{player.name}{player.isBot ? " - IA" : ""}{player.isHost ? " - Hote" : ""}{player.isMayor ? " - Maire" : ""}</span>
-                  <small>{player.connected ? "en ligne" : "deconnecte"} - {player.alive ? "en jeu" : "elimine"}</small>
+                  <small>{player.connected ? "en ligne" : "deconnecte"} - {player.alive ? "en jeu" : "elimine"}{player.botVoice ? ` - voix ${player.botVoice.voiceName}` : ""}</small>
                 </div>
               ))}
             </div>
@@ -291,6 +313,7 @@ function AdminPage({ onBack }: { onBack: () => void }) {
 function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: string; onToast: (message: string) => void; onLeaveRoom: () => void }) {
   const [now, setNow] = useState(Date.now());
   const [voiceEnabled, setVoiceEnabled] = useState(() => localStorage.getItem("les-infiltres-voice") === "on");
+  const botVoice = useBotVoice(view, onToast);
   const audio = useIntegratedAudio(view, onToast);
   const you = view.you;
   const alivePlayers = view.players.filter((player) => player.alive);
@@ -373,7 +396,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
         </section>
 
         <aside className="panel side-panel">
-          <AudioPanel view={view} audio={audio} />
+          <AudioPanel view={view} audio={audio} botVoice={botVoice} />
           <h2><Users size={18} /> Joueurs</h2>
           <div className="players">
             {view.players.map((player) => (
@@ -544,6 +567,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
   const viewRef = useRef(view);
   const activityFrameRef = useRef<number | undefined>(undefined);
   const audioContextRef = useRef<AudioContext | undefined>(undefined);
+  const recognitionRef = useRef<SpeechRecognitionLike | undefined>(undefined);
   const lastActivityRef = useRef(false);
 
   viewRef.current = view;
@@ -553,6 +577,8 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
     activityFrameRef.current = undefined;
     void audioContextRef.current?.close();
     audioContextRef.current = undefined;
+    recognitionRef.current?.stop();
+    recognitionRef.current = undefined;
     if (lastActivityRef.current) socket.emit("audioActivity", { code: viewRef.current.code, speaking: false });
     lastActivityRef.current = false;
     for (const peer of peersRef.current.values()) {
@@ -598,6 +624,35 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
     tick();
   };
 
+  const startSpeechRecognition = () => {
+    const typedWindow = window as typeof window & { SpeechRecognition?: SpeechRecognitionConstructor; webkitSpeechRecognition?: SpeechRecognitionConstructor };
+    const Recognition = typedWindow.SpeechRecognition ?? typedWindow.webkitSpeechRecognition;
+    if (!Recognition) {
+      console.info("realtime disconnected", "browser transcription unavailable");
+      return;
+    }
+    const recognition = new Recognition();
+    recognition.lang = "fr-FR";
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.onresult = (event) => {
+      const result = event.results[event.results.length - 1];
+      const text = result?.[0]?.transcript?.trim();
+      if (!result?.isFinal || !text) return;
+      console.info("transcription received", text);
+      socket.emit("audioTranscript", { code: viewRef.current.code, text });
+    };
+    recognition.onerror = (event) => console.warn("realtime disconnected", event);
+    recognition.onend = () => console.info("realtime disconnected", "speech recognition ended");
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+      console.info("realtime connected", "browser speech recognition");
+    } catch (error) {
+      console.warn("realtime disconnected", error);
+    }
+  };
+
   const ensurePeer = (peerId: string, initiator: boolean) => {
     const existing = peersRef.current.get(peerId);
     if (existing) return existing.connection;
@@ -619,7 +674,12 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
       }
       entry.audio.srcObject = stream;
       entry.audio.muted = !canHearRemote(viewRef.current, peerId);
-      void entry.audio.play().catch(() => undefined);
+      void entry.audio.play()
+        .then(() => console.info("audio playback started"))
+        .catch((error) => {
+          console.warn("audio playback error", error);
+          onToast("Audio indisponible, reponse affichee en texte.");
+        });
     };
     if (initiator) {
       void connection.createOffer()
@@ -638,6 +698,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
       return;
     }
     setPermission("requesting");
+    console.info("microphone permission status", "requesting");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       if (!stream.getAudioTracks().length) {
@@ -649,14 +710,19 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
       localStreamRef.current = stream;
       setEnabled(true);
       setPermission("granted");
+      console.info("microphone permission status", "granted");
+      console.info("speaker/audio context status", window.AudioContext ? "available" : "unavailable");
       startActivityMeter(stream);
+      startSpeechRecognition();
     } catch (error) {
       const name = error instanceof DOMException ? error.name : "";
       if (name === "NotFoundError" || name === "DevicesNotFoundError") {
         setPermission("missing");
+        console.info("microphone permission status", "missing");
         onToast("Aucun micro detecte.");
       } else {
         setPermission("denied");
+        console.info("microphone permission status", "denied");
         onToast("Permission micro refusee.");
       }
     }
@@ -724,22 +790,103 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
     permission,
     startAudio,
     stopAudio,
-    activePeers: peerCount
+    activePeers: peerCount,
+    botListening: enabled && view.players.some((player) => player.isBot && player.alive)
+  };
+}
+
+function useBotVoice(view: RoomView, onToast: (message: string) => void) {
+  const [enabled, setEnabled] = useState(() => localStorage.getItem("les-infiltres-bot-voice") === "on");
+  const [status, setStatus] = useState<BotAudioStatus>(enabled ? "enabled" : "disabled");
+  const spokenIdsRef = useRef(new Set<string>());
+
+  const enable = () => {
+    localStorage.setItem("les-infiltres-bot-voice", "on");
+    setEnabled(true);
+    setStatus("enabled");
+    console.info("speaker/audio context status", "bot voice enabled");
+    if ("speechSynthesis" in window) {
+      const utterance = new SpeechSynthesisUtterance("Son des bots active.");
+      utterance.lang = "fr-FR";
+      utterance.volume = 0.75;
+      window.speechSynthesis.speak(utterance);
+    } else {
+      setStatus("error");
+      onToast("Audio indisponible, reponse affichee en texte.");
+    }
+  };
+
+  const disable = () => {
+    localStorage.setItem("les-infiltres-bot-voice", "off");
+    setEnabled(false);
+    setStatus("disabled");
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  };
+
+  useEffect(() => {
+    if (!enabled) return;
+    const message = [...view.chatMessages].reverse().find((item) => item.isBot && !spokenIdsRef.current.has(item.id));
+    if (!message) return;
+    spokenIdsRef.current.add(message.id);
+    console.info("bot response text received", { bot: message.playerName, text: message.text });
+    if (!("speechSynthesis" in window)) {
+      setStatus("error");
+      onToast("Audio indisponible, reponse affichee en texte.");
+      return;
+    }
+    try {
+      console.info("bot audio chunk received", { source: "browser-speech-synthesis", bot: message.playerName });
+      const utterance = new SpeechSynthesisUtterance(message.text);
+      const voice = view.players.find((player) => player.id === message.playerId)?.botVoice;
+      utterance.lang = "fr-FR";
+      utterance.rate = voice?.speakingRate ?? botVoiceRate(message.playerName);
+      utterance.pitch = voice?.pitch ?? botVoicePitch(message.playerName);
+      utterance.volume = voice?.volume ?? 0.9;
+      utterance.onstart = () => {
+        console.info("audio playback started", { bot: message.playerName });
+        setStatus("speaking");
+      };
+      utterance.onend = () => setStatus("enabled");
+      utterance.onerror = (event) => {
+        console.warn("audio playback error", event);
+        setStatus("error");
+        onToast("Audio indisponible, reponse affichee en texte.");
+      };
+      console.info("bot selected voice", { bot: message.playerName, voiceName: voice?.voiceName, style: voice?.voiceStyle });
+      console.info("bot audio response received", { bot: message.playerName, voiceName: voice?.voiceName });
+      window.speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.warn("audio playback error", error);
+      setStatus("error");
+      onToast("Audio indisponible, reponse affichee en texte.");
+    }
+  }, [enabled, view.chatMessages, onToast]);
+
+  return {
+    enabled,
+    status,
+    enable,
+    disable,
+    speaking: status === "speaking" || view.players.some((player) => player.isBot && player.audioActive)
   };
 }
 
 function Lobby({ view }: { view: RoomView }) {
   const [draft, setDraft] = useState(view.config);
+  const [botDraft, setBotDraft] = useState(view.botAi.config);
   const [editing, setEditing] = useState(false);
-  const [botCount, setBotCount] = useState(1);
-  const [botTarget, setBotTarget] = useState(Math.max(view.lobby.minPlayers, view.lobby.playerCount));
   const canStart = view.lobby.playerCount >= view.lobby.minPlayers;
 
   useEffect(() => setDraft(view.config), [view.config]);
+  useEffect(() => setBotDraft(view.botAi.config), [view.botAi.config]);
 
   const saveConfig = (next: GameConfig) => {
     setDraft(next);
     socket.emit("updateConfig", { code: view.code, config: next });
+  };
+  const saveBotConfig = (next: BotRoomConfig) => {
+    setBotDraft(next);
+    socket.emit("updateBotConfig", { code: view.code, botConfig: next });
   };
   const closeRoom = () => {
     if (window.confirm("Fermer le salon pour tous les joueurs ?")) socket.emit("closeRoom", { code: view.code });
@@ -764,28 +911,9 @@ function Lobby({ view }: { view: RoomView }) {
           <button className="danger" onClick={closeRoom}>Fermer le salon</button>
         </div>
       )}
-      {view.you?.isHost && (
+      {view.you?.isHost && view.botAi.enabled && (
         <div className="bot-controls">
-          <h3>Joueurs IA</h3>
-          {view.botAi.enabled ? (
-            <>
-              <div className="config-grid">
-                <ConfigField label="Nombre de bots" help={`Maximum par salon : ${view.botAi.maxPerRoom}.`}>
-                  <NumericConfigInput value={botCount} min={1} max={view.botAi.maxPerRoom} onCommit={setBotCount} />
-                </ConfigField>
-                <ConfigField label="Completer jusqu'a" help="Ajoute uniquement les bots manquants pour atteindre ce nombre de joueurs.">
-                  <NumericConfigInput value={botTarget} min={view.lobby.minPlayers} max={view.lobby.maxPlayers} onCommit={setBotTarget} />
-                </ConfigField>
-              </div>
-              <div className="actions-row">
-                <button onClick={() => socket.emit("addBot", { code: view.code })}>Ajouter un bot IA</button>
-                <button onClick={() => socket.emit("addBots", { code: view.code, count: botCount })}>Ajouter {botCount} bot(s)</button>
-                <button onClick={() => socket.emit("fillWithBots", { code: view.code, targetCount: botTarget })}>Completer jusqu'a {botTarget}</button>
-              </div>
-            </>
-          ) : (
-            <p className="muted">Bots IA desactives. Configurez Azure OpenAI cote serveur pour les activer.</p>
-          )}
+          <BotConfigEditor config={botDraft} onChange={saveBotConfig} maxPerRoom={view.botAi.maxPerRoom} />
         </div>
       )}
       {view.you?.isHost && editing && (
@@ -800,6 +928,50 @@ function Lobby({ view }: { view: RoomView }) {
         </button>
       ) : (
         <p className="muted">En attente du lancement par l'hote.</p>
+      )}
+    </div>
+  );
+}
+
+function BotConfigEditor({ config, onChange, maxPerRoom, compact = false }: { config: BotRoomConfig; onChange: (config: BotRoomConfig) => void; maxPerRoom: number; compact?: boolean }) {
+  const update = (patch: Partial<BotRoomConfig>) => {
+    const next = mergeBotConfig({ ...config, ...patch });
+    next.count = Math.min(next.count, maxPerRoom);
+    onChange(next);
+  };
+  return (
+    <div className={`config bot-config ${compact ? "compact" : ""}`}>
+      <h3><Users size={16} /> Configuration des Bots IA</h3>
+      <div className="config-grid">
+        <ConfigField label="Bots IA" help="Active ou desactive les bots pour ce salon.">
+          <label><input type="checkbox" checked={config.enabled} onChange={(e) => update({ enabled: e.target.checked })} /> Activer</label>
+        </ConfigField>
+        <ConfigField label="Nombre de bots" help={`Nombre de bots maintenus dans le lobby. Maximum serveur : ${maxPerRoom}.`}>
+          <NumericConfigInput value={config.count} min={0} max={maxPerRoom} onCommit={(value) => update({ count: value })} />
+        </ConfigField>
+        <ConfigField label="Completion auto" help="Ajoute ou retire automatiquement des bots pour atteindre le minimum de joueurs.">
+          <label><input type="checkbox" checked={config.autoFill} onChange={(e) => update({ autoFill: e.target.checked })} /> Completer la room</label>
+        </ConfigField>
+        <ConfigField label="Participation" help="Frequence et temperature des interventions IA.">
+          <select value={config.participation} onChange={(e) => update({ participation: e.target.value as BotRoomConfig["participation"] })}>
+            <option value="discreet">discret</option>
+            <option value="normal">normal</option>
+            <option value="talkative">talkative</option>
+          </select>
+        </ConfigField>
+        <ConfigField label="Voix IA" help="Prepare la voix IA des bots. Le MVP reste texte si desactive.">
+          <label><input type="checkbox" checked={config.audioEnabled} onChange={(e) => update({ audioEnabled: e.target.checked })} /> Activer</label>
+        </ConfigField>
+        <ConfigField label="Temps reponse" help="Temps moyen avant qu'un bot agisse, en millisecondes.">
+          <NumericConfigInput value={config.averageResponseMs} min={250} max={10000} step={250} onCommit={(value) => update({ averageResponseMs: value })} />
+        </ConfigField>
+      </div>
+      {!compact && (
+        <div className="toggles">
+          <label><input type="checkbox" checked={config.allowMayor} onChange={(e) => update({ allowMayor: e.target.checked })} /> Bots candidats Maire</label>
+          <label><input type="checkbox" checked={config.allowDebateSpeech} onChange={(e) => update({ allowDebateSpeech: e.target.checked })} /> Bots parlent en debat</label>
+          <label><input type="checkbox" checked={config.allowAudio} onChange={(e) => update({ allowAudio: e.target.checked })} /> Bots utilisent l'audio</label>
+        </div>
       )}
     </div>
   );
@@ -1151,11 +1323,12 @@ function ChatPanel({ view }: { view: RoomView }) {
       <h3>Messages</h3>
       <div className="chat-log">
         {view.chatMessages.length ? view.chatMessages.slice(-12).map((message) => (
-          <p key={message.id} className={message.scope === "infiltres" ? "private-message" : ""}>
-            <strong>{message.playerName}</strong> {message.scope === "infiltres" ? <span>Infiltres</span> : null}
+          <p key={message.id} className={`${message.scope === "infiltres" ? "private-message" : ""} ${message.isBot ? "bot-message" : ""}`}>
+            <strong>{message.playerName}</strong> {message.isBot ? <span>IA</span> : null} {message.scope === "infiltres" ? <span>Infiltres</span> : null}
             {message.text}
           </p>
         )) : <p className="muted">Aucun message visible.</p>}
+        {view.botThinking.map((name) => <p key={name} className="bot-thinking"><strong>{name}</strong> reflechit...</p>)}
       </div>
       {canChat && (
         <form className="chat-form" onSubmit={submit}>
@@ -1169,10 +1342,17 @@ function ChatPanel({ view }: { view: RoomView }) {
 
 function DebatePanel({ view, timer }: { view: RoomView; timer?: TimerInfo }) {
   const speaker = view.players.find((player) => player.id === view.activePlayerId);
+  const isOwnDefense = view.phase === "DEFENSE" && !!view.you && speaker?.id === view.you.id;
   return (
     <div className="content">
       <h2>{view.phase === "DAY_ANNOUNCEMENT" ? "Le jour se leve" : view.phase === "DEFENSE" ? "Defense individuelle" : "Debat en cours"}</h2>
-      <p>Joueur qui parle : <strong>{speaker?.name ?? "discussion libre"}</strong></p>
+      <p>{view.phase === "DEFENSE" && speaker ? <>Defense de <strong>{speaker.name}</strong> en cours...</> : <>Joueur qui parle : <strong>{speaker?.name ?? "discussion libre"}</strong></>}</p>
+      {view.phase === "DEFENSE" && speaker && <p className="muted">{speaker.name} peut terminer sa defense avant la fin du chrono.</p>}
+      {isOwnDefense && (
+        <button className="primary" onClick={() => socket.emit("finishDefense", { code: view.code, participantId: speaker.id })}>
+          <Gavel size={18} /> Terminer ma defense
+        </button>
+      )}
       {timer ? <PhaseTimer timer={timer} compact /> : <p>Temps restant : <strong>non chronometre</strong></p>}
       {!view.you?.isMayor && <p className="muted">Le Maire controle la parole et le passage au vote.</p>}
     </div>
@@ -1400,19 +1580,31 @@ function GameLog({ entries }: { entries: NonNullable<RoomView["gameLog"]> }) {
   return <div className="game-log">{entries.slice(-12).map((entry) => <p key={`${entry.at}-${entry.message}`}><span>{new Date(entry.at).toLocaleTimeString()}</span> {entry.message}</p>)}</div>;
 }
 
-function AudioPanel({ view, audio }: { view: RoomView; audio: ReturnType<typeof useIntegratedAudio> }) {
+function AudioPanel({ view, audio, botVoice }: { view: RoomView; audio: ReturnType<typeof useIntegratedAudio>; botVoice: ReturnType<typeof useBotVoice> }) {
   const you = view.you;
   const muted = view.players.find((player) => player.id === you?.id)?.muted ?? false;
   if (!you) return null;
   return (
     <div className="audio">
       <h2><Shield size={18} /> Audio</h2>
+      <div className="bot-sound-panel">
+        <div className="bot-sound-status">
+          <strong>{botVoice.enabled ? "Son active" : "Son coupe"}</strong>
+          {botVoice.speaking && <span>Bot en train de parler...</span>}
+          {audio.botListening && <span>Bot ecoute</span>}
+        </div>
+        <div className="actions-row audio-actions">
+          <button disabled={botVoice.enabled} onClick={botVoice.enable}><Volume2 size={17} /> Activer le son</button>
+          <button disabled={!botVoice.enabled} onClick={botVoice.disable}><VolumeX size={17} /> Couper le son</button>
+        </div>
+        {botVoice.status === "error" && <small>Audio indisponible, reponse affichee en texte.</small>}
+      </div>
       <p>{view.audioMode === "external" ? "Audio externe selectionne. Utilisez WhatsApp, Discord ou un autre canal." : you.canHearAudio ? "Audio integre actif selon les permissions serveur." : "Audio coupe pour cette phase."}</p>
       {view.audioMode === "integrated" && (
         <>
           <div className="actions-row audio-actions">
             <button disabled={!you.canHearAudio || audio.permission === "requesting"} onClick={audio.enabled ? audio.stopAudio : audio.startAudio}>
-              {audio.enabled ? <MicOff size={17} /> : <Mic size={17} />} {audio.enabled ? "Couper audio" : "Activer mon micro"}
+              {audio.enabled ? <MicOff size={17} /> : <Mic size={17} />} {audio.enabled ? "Couper le micro" : "Activer le micro"}
             </button>
             <button disabled={!you.canHearAudio || !audio.enabled} onClick={() => socket.emit("setMuted", { code: view.code, playerId: you.id, muted: !muted })}>
               {muted ? <MicOff size={17} /> : <Mic size={17} />} {muted ? "Unmute" : "Mute"}
@@ -1526,7 +1718,23 @@ function audioStatusText(audio: ReturnType<typeof useIntegratedAudio>, muted: bo
   if (audio.permission === "denied") return "Micro refuse par le navigateur.";
   if (!audio.enabled) return "Le micro n'est pas connecte.";
   if (muted || !canSpeak) return "Micro connecte, parole coupee par les regles.";
-  return `Micro ouvert. Pairs audio : ${audio.activePeers}.`;
+  return `Micro actif. Pairs audio : ${audio.activePeers}.`;
+}
+
+function botVoiceRate(name: string) {
+  if (name.includes("Myriam")) return 0.88;
+  if (name.includes("Daniel")) return 0.96;
+  if (name.includes("Sarah")) return 1.05;
+  if (name.includes("Samuel")) return 0.9;
+  return 0.94;
+}
+
+function botVoicePitch(name: string) {
+  if (name.includes("Myriam")) return 0.92;
+  if (name.includes("Daniel")) return 0.82;
+  if (name.includes("Sarah")) return 1.16;
+  if (name.includes("Naomi")) return 1.05;
+  return 0.98;
 }
 
 function phaseLabel(phase: RoomView["phase"] | string) {
@@ -1555,6 +1763,15 @@ function adminStatusLabel(status: AdminRoomSummary["status"]) {
     finished: "terminee"
   };
   return labels[status];
+}
+
+function participationLabel(value: BotRoomConfig["participation"]) {
+  const labels: Record<BotRoomConfig["participation"], string> = {
+    discreet: "discret",
+    normal: "normal",
+    talkative: "talkative"
+  };
+  return labels[value];
 }
 
 function formatSeconds(seconds: number) {
