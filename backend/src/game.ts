@@ -252,9 +252,10 @@ export class GameStore {
   createRoom(name: string, audioMode: AudioMode, socketId: string, sessionId = randomId(), config?: Partial<GameConfig>, botConfig?: Partial<BotRoomConfig>): RoomView {
     const code = this.createCode();
     const host = createPlayer(name, socketId, sessionId, true);
+    const resolvedConfig = mergeConfig(config);
     const resolvedBotConfig = mergeBotConfig(botConfig, this.botAi.defaults);
     resolvedBotConfig.enabled = this.botAi.enabled && resolvedBotConfig.enabled;
-    resolvedBotConfig.count = Math.min(resolvedBotConfig.count, this.botAi.maxPerRoom);
+    resolvedBotConfig.count = Math.min(resolvedBotConfig.count, this.botAi.maxPerRoom, Math.max(0, resolvedConfig.maxPlayers - 1));
     const room: Room = {
       code,
       hostId: host.id,
@@ -263,7 +264,7 @@ export class GameStore {
       botConfig: resolvedBotConfig,
       phase: "LOBBY",
       round: 0,
-      config: mergeConfig(config),
+      config: resolvedConfig,
       players: [host],
       reserveRoles: [],
       night: emptyNight(false),
@@ -383,6 +384,31 @@ export class GameStore {
     this.addBots(code, actorSocketId, missing);
   }
 
+  removeParticipant(code: string, actorSocketId: string, playerId: string) {
+    const room = this.requireHost(code, actorSocketId);
+    if (!room) return;
+    if (room.phase !== "LOBBY") return this.reject(actorSocketId, "Les participants ne peuvent etre retires que dans le lobby.");
+    const target = room.players.find((player) => player.id === playerId);
+    if (!target) return this.reject(actorSocketId, "Participant introuvable.");
+    if (target.id === room.hostId) return this.reject(actorSocketId, "L'hote ne peut pas se retirer lui-meme.");
+    const removedSocketId = target.socketId;
+    target.speaking = false;
+    target.audioActive = false;
+    target.muted = false;
+    if (target.isBot) {
+      room.botConfig.count = Math.max(0, room.botConfig.count - 1);
+      room.botBrains.delete(target.id);
+      room.botThinkingIds.delete(target.id);
+      room.botActionKeys = new Set([...room.botActionKeys].filter((key) => !key.includes(target.id)));
+    }
+    room.players = room.players.filter((player) => player.id !== target.id);
+    room.narrator = `${target.name} a ete retire du lobby par l'hote.`;
+    this.log(room, "system", `${target.name} retire du lobby par l'hote.`);
+    this.syncLobbyBots(room);
+    if (removedSocketId) this.onClose(removedSocketId, "Vous avez été retiré du salon par l'hôte.");
+    this.emit(room);
+  }
+
   updateBotConfig(code: string, actorSocketId: string, botConfig: Partial<BotRoomConfig>) {
     const room = this.requireHost(code, actorSocketId);
     if (!room) return;
@@ -440,9 +466,10 @@ export class GameStore {
     if (!room) return;
     if (room.phase !== "LOBBY") return this.reject(actorSocketId, "La configuration ne peut etre modifiee que dans le lobby.");
     const nextConfig = mergeConfig({ ...room.config, ...config, durations: { ...room.config.durations, ...config.durations } });
-    if (nextConfig.maxPlayers < room.players.length) return this.reject(actorSocketId, "Le nombre maximum ne peut pas etre inferieur au nombre de joueurs deja connectes.");
+    const humanCount = room.players.filter((p) => !p.isBot).length;
+    if (nextConfig.maxPlayers < humanCount) return this.reject(actorSocketId, "Le nombre maximum ne peut pas etre inferieur au nombre de joueurs humains deja connectes.");
     room.config = nextConfig;
-    room.botConfig.count = Math.min(room.botConfig.count, this.botAi.maxPerRoom, Math.max(0, room.config.maxPlayers - room.players.filter((p) => !p.isBot).length));
+    room.botConfig.count = Math.min(room.botConfig.count, this.botAi.maxPerRoom, Math.max(0, room.config.maxPlayers - humanCount));
     this.syncLobbyBots(room);
     room.narrator = "Configuration avancee mise a jour.";
     this.log(room, "system", "Configuration mise a jour par l'hote.");
@@ -751,9 +778,9 @@ export class GameStore {
       room.phase = "DEBATE";
       room.players.forEach((p) => {
         p.speaking = p.id === target.id;
-        p.canSpeak = p.alive && p.id === target.id;
+        p.canSpeak = p.id === target.id || canEliminatedHumanUsePublicChannel(p, room);
         p.audioActive = false;
-        p.muted = room.audioMode === "integrated" ? p.id !== target.id : p.muted;
+        p.muted = room.audioMode === "integrated" ? !p.canSpeak : p.muted;
       });
       if (seconds) this.startTimer(room, seconds, () => this.stopSpeech(room));
       room.narrator = `${target.name} a la parole pendant le debat.`;
@@ -769,9 +796,9 @@ export class GameStore {
     room.phase = "DEFENSE";
     room.players.forEach((p) => {
       p.speaking = p.id === target.id;
-      p.canSpeak = p.alive && p.id === target.id;
+      p.canSpeak = p.id === target.id || canEliminatedHumanUsePublicChannel(p, room);
       p.audioActive = false;
-      p.muted = room.audioMode === "integrated" ? p.id !== target.id : p.muted;
+      p.muted = room.audioMode === "integrated" ? !p.canSpeak : p.muted;
     });
     this.startTimer(room, seconds ?? room.config.durations.defense, () => this.stopSpeech(room));
     room.narrator = `${target.name} a la parole pour sa defense.`;
@@ -786,9 +813,9 @@ export class GameStore {
     if (room.phase !== "DEBATE") this.clearTimer(room);
     room.players.forEach((p) => {
       p.speaking = false;
-      p.canSpeak = p.alive;
+      p.canSpeak = canUsePublicChannel(p, room);
       p.audioActive = false;
-      if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
+      if (room.audioMode === "integrated") p.muted = !canUsePublicChannel(p, room);
     });
     room.phase = "DEBATE";
     room.narrator = "Parole coupee. Discussion libre.";
@@ -879,7 +906,7 @@ export class GameStore {
     if (!room || !actor || !target) return this.reject(actorSocketId, "Partie introuvable.");
     if (room.audioMode !== "integrated") return this.reject(actorSocketId, "L'audio integre n'est pas actif dans cette partie.");
     if (actor.id !== target.id && actor.id !== room.mayorId) return this.reject(actorSocketId, "Seul le Maire peut gerer le micro des autres joueurs.");
-    if (!target.alive && (actor.id !== room.mayorId || !room.config.deadCanHearAudio)) return this.reject(actorSocketId, "Ce joueur ne peut pas utiliser l'audio.");
+    if (!target.alive && target.isBot) return this.reject(actorSocketId, "Ce joueur ne peut pas utiliser l'audio.");
     if (!muted && !target.canSpeak) return this.reject(actorSocketId, "Ce joueur n'a pas le droit de parler maintenant.");
     target.muted = muted;
     if (muted) target.audioActive = false;
@@ -904,7 +931,7 @@ export class GameStore {
     const room = this.getRoom(code);
     const player = room?.players.find((p) => p.socketId === actorSocketId);
     if (!room || !player || room.audioMode !== "integrated") return;
-    const canSpeakNow = room.phase !== "GAME_OVER" && player.canSpeak && !player.muted && player.alive;
+    const canSpeakNow = room.phase !== "GAME_OVER" && canUseCurrentChannel(player, room) && !player.muted;
     const next = speaking && canSpeakNow;
     if (player.audioActive === next) return;
     player.audioActive = next;
@@ -998,10 +1025,10 @@ export class GameStore {
     room.mayorVotes = [];
     room.players.forEach((p) => {
       p.canVote = p.alive;
-      p.canSpeak = p.alive;
+      p.canSpeak = canUsePublicChannel(p, room);
       p.speaking = false;
       p.audioActive = false;
-      if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
+      if (room.audioMode === "integrated") p.muted = !canUsePublicChannel(p, room);
     });
     const names = room.mayorNominees.map((id) => room.players.find((p) => p.id === id)?.name).filter(Boolean).join(", ");
     room.narrator = `Candidats Maire verrouilles : ${names}. Votez uniquement parmi les candidats nomines.`;
@@ -1021,9 +1048,9 @@ export class GameStore {
     room.revoteTargets = undefined;
     room.players.forEach((p) => {
       p.speaking = false;
-      p.canSpeak = p.alive;
+      p.canSpeak = canUsePublicChannel(p, room);
       p.audioActive = false;
-      if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
+      if (room.audioMode === "integrated") p.muted = !canUsePublicChannel(p, room);
     });
     room.narrator = NarrationService.fallback({ type: "nomination", phase: room.phase, round: room.round }, "Les nominations sont ouvertes. Chaque joueur vivant peut designer un suspect, et peut changer d'avis avant la fin.");
     this.log(room, "phase", "Nominations ouvertes.");
@@ -1048,9 +1075,9 @@ export class GameStore {
     room.defenseRequests = [];
     room.players.forEach((p) => {
       p.speaking = false;
-      p.canSpeak = p.alive;
+      p.canSpeak = canUsePublicChannel(p, room);
       p.audioActive = false;
-      if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
+      if (room.audioMode === "integrated") p.muted = !canUsePublicChannel(p, room);
     });
     const nomineeNames = room.nominees.map((id) => room.players.find((p) => p.id === id)?.name).filter(Boolean).join(", ");
     room.narrator = `Nominations verrouillees : ${nomineeNames}. Les nomines peuvent demander une defense au Maire.`;
@@ -1080,9 +1107,9 @@ export class GameStore {
     }
     room.players.forEach((p) => {
       p.speaking = false;
-      p.canSpeak = p.alive;
+      p.canSpeak = canUsePublicChannel(p, room);
       p.audioActive = false;
-      if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
+      if (room.audioMode === "integrated") p.muted = !canUsePublicChannel(p, room);
     });
     if (shouldAutoVoteAfterDefenseRequests(room)) return this.startVoteFromDefenseRequests(room);
     room.phase = "DEFENSE_REQUESTS";
@@ -1106,7 +1133,7 @@ export class GameStore {
       p.canSpeak = false;
       p.speaking = false;
       p.audioActive = false;
-      if (room.audioMode === "integrated") p.muted = p.alive || !room.config.deadCanHearAudio;
+      if (room.audioMode === "integrated") p.muted = true;
     });
     room.night = emptyNight(room.round === 1);
     room.narrator = NarrationService.fallback({ type: "nightStart", phase: room.phase, round: room.round }, `La nuit tombe sur le groupe. Nuit ${room.round}. Les roles se reveillent un a un.`);
@@ -1194,9 +1221,9 @@ export class GameStore {
     room.narrator = `${NarrationService.fallback({ type: "dayStart", phase: "DAY_ANNOUNCEMENT", round: room.round, summary: result }, "Le jour se leve, et chacun cherche les signes de trahison.")} ${result} ${this.silencedText(room)} Le Maire peut ouvrir le debat.`;
     room.players.forEach((p) => {
       p.speaking = false;
-      p.canSpeak = p.alive;
+      p.canSpeak = canUsePublicChannel(p, room);
       p.audioActive = false;
-      if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
+      if (room.audioMode === "integrated") p.muted = !canUsePublicChannel(p, room);
     });
     this.log(room, "phase", "Jour ouvert apres resolution de nuit.");
     this.checkWin(room);
@@ -1249,11 +1276,11 @@ export class GameStore {
   private eliminate(room: Room, player: Player, reason: "vote" | "nuit" | "depart") {
     player.alive = false;
     player.canVote = false;
-    player.canSpeak = false;
+    player.canSpeak = canEliminatedHumanUsePublicChannel(player, room);
     player.speaking = false;
     player.audioActive = false;
     player.revealedRole = player.role;
-    player.muted = room.audioMode === "integrated" ? !room.config.deadCanHearAudio : player.muted;
+    player.muted = room.audioMode === "integrated" ? !canEliminatedHumanUsePublicChannel(player, room) : player.muted;
     if (player.id === room.mayorId) room.mayorId = this.pickNextMayor(room);
     const label = reason === "depart" ? "depart volontaire" : reason;
     this.log(room, "elimination", `${player.name} elimine par ${label}. Role revele : ${ROLE_LABELS[player.role ?? "Croyant"]}.`);
@@ -1304,16 +1331,16 @@ export class GameStore {
       room.votes = [];
       room.players.forEach((p) => {
         p.speaking = false;
-        p.canSpeak = p.alive;
+        p.canSpeak = canUsePublicChannel(p, room);
         p.audioActive = false;
-        if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
+        if (room.audioMode === "integrated") p.muted = !canUsePublicChannel(p, room);
       });
     } else if (phase === "DEBATE") {
       room.players.forEach((p) => {
         p.speaking = false;
-        p.canSpeak = p.alive;
+        p.canSpeak = canUsePublicChannel(p, room);
         p.audioActive = false;
-        if (room.audioMode === "integrated") p.muted = !p.alive && !room.config.deadCanHearAudio;
+        if (room.audioMode === "integrated") p.muted = !canUsePublicChannel(p, room);
       });
     }
     this.log(room, "phase", narrator);
@@ -1511,9 +1538,9 @@ export class GameStore {
           room.phase = "DEFENSE";
           room.players.forEach((p) => {
             p.speaking = p.id === target.id;
-            p.canSpeak = p.alive && p.id === target.id;
+            p.canSpeak = p.id === target.id || canEliminatedHumanUsePublicChannel(p, room);
             p.audioActive = false;
-            p.muted = room.audioMode === "integrated" ? p.id !== target.id : p.muted;
+            p.muted = room.audioMode === "integrated" ? !p.canSpeak : p.muted;
           });
           this.startTimer(room, room.config.durations.defense, () => this.stopSpeech(room));
           room.narrator = `${target.name} a la parole pour sa defense.`;
@@ -2131,7 +2158,7 @@ export class GameStore {
       audioMode: room.audioMode,
       round: room.round,
       config: room.config,
-      lobby: lobbyInfo(room.players.length, room.config),
+      lobby: lobbyInfo(room.players, room.config),
       botAi: { enabled: this.botAi.enabled, maxPerRoom: this.botAi.maxPerRoom, audioEnabled: room.botConfig.audioEnabled, config: room.botConfig },
       players: room.players.map((p) => publicPlayer(p, room, activeStep, player)),
       you: player
@@ -2284,7 +2311,8 @@ function botAllowedActions(room: Room, bot: Player, activeStep?: NightStep): Bot
 }
 
 function canSendChat(player: Player, room: Room) {
-  if (!player.alive || !player.canSpeak || player.muted) return false;
+  if (player.isBot && !player.alive) return false;
+  if (!canUseCurrentChannel(player, room) || player.muted) return false;
   if (room.phase === "NIGHT") return room.night.steps[room.night.stepIndex] === "infiltres" && player.role === "Infiltre";
   return ["MAYOR_NOMINATION", "MAYOR_ELECTION", "DAY_ANNOUNCEMENT", "DEBATE", "NOMINATION", "DEFENSE_REQUESTS", "DEFENSE", "VOTING", "RESULT"].includes(room.phase);
 }
@@ -2408,11 +2436,15 @@ function shouldAutoVoteAfterDefenseRequests(room: Room) {
   });
 }
 
-function lobbyInfo(playerCount: number, config: GameConfig) {
+function lobbyInfo(players: Player[], config: GameConfig) {
+  const playerCount = players.length;
+  const botCount = players.filter((player) => player.isBot).length;
   return {
     minPlayers: MIN_PLAYERS,
     maxPlayers: config.maxPlayers,
     playerCount,
+    humanCount: playerCount - botCount,
+    botCount,
     missingPlayers: Math.max(0, MIN_PLAYERS - playerCount),
     plannedInfiltrators: getInfiltratorCount(playerCount),
     potentialRoles: getPotentialRoles(playerCount, config)
@@ -2420,6 +2452,7 @@ function lobbyInfo(playerCount: number, config: GameConfig) {
 }
 
 function powerStatusesFor(player: Player, room: Room): PowerStatus[] {
+  if (!player.alive) return [];
   if (player.role === "Ministre") {
     return [
       { key: "ministerSave", label: "Sauver une victime", used: room.powers.ministerSaveUsed },
@@ -2457,7 +2490,8 @@ function canSeeInfiltratorVotes(player: Player | undefined, room: Room, activeSt
 }
 
 function canSeeNightAudioState(viewer: Player | undefined, target: Player, room: Room) {
-  if (room.phase !== "NIGHT" || room.night.steps[room.night.stepIndex] !== "infiltres" || !viewer?.alive) return true;
+  if (room.phase !== "NIGHT" || room.night.steps[room.night.stepIndex] !== "infiltres") return true;
+  if (!viewer?.alive) return false;
   if (viewer.role === "Infiltre") return target.role === "Infiltre" || target.role === "Guetteuse" || target.id === viewer.id;
   if (viewer.role === "Guetteuse") return target.role === "Infiltre" || target.id === viewer.id;
   return false;
@@ -2465,11 +2499,11 @@ function canSeeNightAudioState(viewer: Player | undefined, target: Player, room:
 
 function canHearPlayer(listener: Player, speaker: Player, room: Room) {
   if (room.audioMode !== "integrated" || room.phase === "GAME_OVER") return false;
-  if (!listener.alive && !room.config.deadCanHearAudio) return false;
-  if (!speaker.alive || !speaker.canSpeak || speaker.muted) return false;
+  if (!canUseCurrentChannel(listener, room)) return false;
+  if (!canUseCurrentChannel(speaker, room) || speaker.muted) return false;
   if (room.phase === "LOBBY") return true;
   if (room.phase === "NIGHT") return canSeeInfiltratorChannel(listener, room) && speaker.role === "Infiltre";
-  if (room.phase === "DEFENSE") return room.players.some((p) => p.id === speaker.id && p.speaking);
+  if (room.phase === "DEFENSE") return room.players.some((p) => p.id === speaker.id && p.speaking) || canEliminatedHumanUsePublicChannel(speaker, room);
   return ["MAYOR_NOMINATION", "MAYOR_ELECTION", "DAY_ANNOUNCEMENT", "DEBATE", "NOMINATION", "DEFENSE_REQUESTS", "VOTING", "RESULT"].includes(room.phase);
 }
 
@@ -2477,7 +2511,7 @@ function canUseIntegratedAudio(player: Player, room: Room) {
   if (room.audioMode !== "integrated" || room.phase === "GAME_OVER") return false;
   if (room.phase === "LOBBY") return true;
   if (room.phase === "NIGHT") return room.night.steps[room.night.stepIndex] === "infiltres" && player.alive && (player.role === "Infiltre" || player.role === "Guetteuse");
-  return player.alive || room.config.deadCanHearAudio;
+  return canUsePublicChannel(player, room);
 }
 
 function audioPeerIdsFor(player: Player, room: Room) {
@@ -2564,6 +2598,19 @@ function shuffle<T>(items: T[]) {
     .map((value) => ({ value, sort: Math.random() }))
     .sort((a, b) => a.sort - b.sort)
     .map(({ value }) => value);
+}
+
+function canEliminatedHumanUsePublicChannel(player: Player, room: Room) {
+  return !player.isBot && !player.alive && room.phase !== "NIGHT" && room.phase !== "GAME_OVER";
+}
+
+function canUsePublicChannel(player: Player, room: Room) {
+  return player.alive || canEliminatedHumanUsePublicChannel(player, room);
+}
+
+function canUseCurrentChannel(player: Player, room: Room) {
+  if (room.phase === "NIGHT") return player.alive && player.canSpeak;
+  return canUsePublicChannel(player, room) && player.canSpeak;
 }
 
 function pickBotTarget<T>(items: T[]) {

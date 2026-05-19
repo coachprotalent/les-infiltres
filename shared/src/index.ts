@@ -153,6 +153,8 @@ export type LobbyInfo = {
   minPlayers: number;
   maxPlayers: number;
   playerCount: number;
+  humanCount: number;
+  botCount: number;
   missingPlayers: number;
   plannedInfiltrators: number;
   potentialRoles: Role[];
@@ -286,6 +288,7 @@ export type ClientToServerEvents = {
   addBot: (payload: { code: string }) => void;
   addBots: (payload: { code: string; count: number }) => void;
   fillWithBots: (payload: { code: string; targetCount: number }) => void;
+  removeParticipant: (payload: { code: string; playerId: string }) => void;
   nominateMayor: (payload: { code: string; targetId: string }) => void;
   electMayor: (payload: { code: string; targetId: string }) => void;
   adminNext: (payload: { code: string }) => void;
@@ -425,8 +428,8 @@ export const ROLE_ABILITIES: Record<Role, string[]> = {
 };
 
 export function getInfiltratorCount(playerCount: number) {
-  if (playerCount >= 17) return 4;
-  if (playerCount >= 12) return 3;
+  if (playerCount >= 16) return 4;
+  if (playerCount >= 11) return 3;
   if (playerCount >= 7) return 2;
   return 0;
 }
@@ -477,12 +480,12 @@ export function generateRoleDistribution(playerCount: number, config: GameConfig
   const suggestedSpecials: Role[] =
     playerCount >= 17
       ? ["Ministre", "Hackeuse", "Pasteur", "LeaderLouange", "LanceuseAlerte", "Guetteuse"]
-      : playerCount >= 12
+      : playerCount >= 11
         ? ["Ministre", "Hackeuse", "Pasteur", "LeaderLouange", "LanceuseAlerte"]
         : ["Ministre", "Hackeuse", "Pasteur"];
   const advancedSpecials: Role[] = ["Avocate", "AgentDouble", "Sage"];
   const relaxedOrder: Role[] =
-    playerCount >= 12
+    playerCount >= 11
       ? ["Ministre", "Hackeuse", "Pasteur", "Avocate", "Sage", "LeaderLouange", "LanceuseAlerte", "AgentDouble", "Guetteuse"]
       : ["Ministre", "Hackeuse", "Pasteur", "Sage", "Avocate", "AgentDouble"];
   const specialOrder = config.requireSpecialRoles ? [...suggestedSpecials, ...advancedSpecials] : relaxedOrder;

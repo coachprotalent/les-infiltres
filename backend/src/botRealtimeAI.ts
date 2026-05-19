@@ -124,7 +124,7 @@ export class BotRealtimeAIService {
     this.configured = !!this.realtimeEndpoint && !!this.realtimeApiKey;
     this.reasoningEnabled = (env.BOT_REASONING_ENABLED ?? "true").toLowerCase() === "true";
     this.reasoningConfigured = !!this.reasoningEndpoint && !!this.reasoningApiKey;
-    this.maxPerRoom = clampInt(Number(env.BOT_MAX_PER_ROOM ?? 5), 0, 20, 5);
+    this.maxPerRoom = clampInt(Number(env.BOT_MAX_PER_ROOM ?? 20), 0, 20, 20);
     this.participation = env.BOT_DEFAULT_PARTICIPATION || "normal";
     this.audioEnabled = (env.BOT_AUDIO_ENABLED ?? "false").toLowerCase() === "true";
     this.maxReasoningTokens = clampInt(Number(env.BOT_MAX_REASONING_TOKENS ?? 1200), 120, 4000, 1200);

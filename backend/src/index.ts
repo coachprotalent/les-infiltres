@@ -123,6 +123,7 @@ io.on("connection", (socket) => {
   socket.on("addBot", ({ code }) => store.addBot(code, socket.id));
   socket.on("addBots", ({ code, count }) => store.addBots(code, socket.id, count));
   socket.on("fillWithBots", ({ code, targetCount }) => store.fillWithBots(code, socket.id, targetCount));
+  socket.on("removeParticipant", ({ code, playerId }) => store.removeParticipant(code, socket.id, playerId));
   socket.on("nominateMayor", ({ code, targetId }) => store.nominateMayor(code, socket.id, targetId));
   socket.on("electMayor", ({ code, targetId }) => store.electMayor(code, socket.id, targetId));
   socket.on("adminNext", ({ code }) => store.adminNext(code, socket.id));
