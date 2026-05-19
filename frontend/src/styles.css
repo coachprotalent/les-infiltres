@@ -725,6 +725,19 @@ p {
   color: #dfb95b;
 }
 
+.player-actions {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.player-actions button {
+  min-height: 36px;
+}
+
 .player.out {
   opacity: 0.52;
   text-decoration: line-through;

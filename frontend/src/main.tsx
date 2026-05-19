@@ -384,7 +384,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
         {you && <button className="danger" onClick={quit}>{view.phase === "LOBBY" ? "Quitter le salon" : "Quitter la partie"}</button>}
         {mayor && <p className="mayor-line"><Crown size={16} /> Maire : {mayor.name}</p>}
         {timer && <PhaseTimer timer={timer} />}
-        {you && !you.alive && <p className="spectator-line">Vous etes emprisonne. Vous pouvez observer la partie, mais vous ne pouvez plus voter, parler ou agir.</p>}
+        {you && !you.alive && <p className="spectator-line">Vous êtes emprisonné. Vous ne pouvez plus agir dans la partie, mais vous pouvez continuer à discuter.</p>}
         {toast && <p className="toast">{toast}</p>}
       </section>
 
@@ -422,17 +422,18 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
 
 function PhaseContent({ view, timer, onLeaveRoom }: { view: RoomView; timer?: TimerInfo; onLeaveRoom: () => void }) {
   const hasPhasePanel = hasKnownPhasePanel(view.phase);
+  const canAct = view.you?.alive !== false;
   return (
     <>
       {view.phase === "LOBBY" && <Lobby view={view} />}
-      {view.phase === "MAYOR_NOMINATION" && <MayorNomination view={view} />}
-      {view.phase === "MAYOR_ELECTION" && <MayorElection view={view} />}
+      {view.phase === "MAYOR_NOMINATION" && (canAct ? <MayorNomination view={view} /> : <SpectatorPhasePanel view={view} />)}
+      {view.phase === "MAYOR_ELECTION" && (canAct ? <MayorElection view={view} /> : <SpectatorPhasePanel view={view} />)}
       {view.phase !== "LOBBY" && view.you && <RoleCard view={view} />}
-      {view.phase === "NIGHT" && <NightPanel view={view} />}
+      {view.phase === "NIGHT" && (canAct ? <NightPanel view={view} /> : <SpectatorPhasePanel view={view} />)}
       {["DAY_ANNOUNCEMENT", "DEBATE", "DEFENSE"].includes(view.phase) && <DebatePanel view={view} timer={timer} />}
-      {view.phase === "NOMINATION" && <NominationPanel view={view} />}
+      {view.phase === "NOMINATION" && (canAct ? <NominationPanel view={view} /> : <SpectatorPhasePanel view={view} />)}
       {view.phase === "DEFENSE_REQUESTS" && <DefenseRequestsPanel view={view} />}
-      {view.phase === "VOTING" && <VotePanel view={view} />}
+      {view.phase === "VOTING" && (canAct ? <VotePanel view={view} /> : <SpectatorPhasePanel view={view} />)}
       {view.phase === "RESULT" && <ResultPanel view={view} />}
       {view.phase === "GAME_OVER" && <EndPanel view={view} onLeaveRoom={onLeaveRoom} />}
       {!hasPhasePanel && <PhaseFallback view={view} timer={timer} />}
@@ -464,6 +465,20 @@ function PhaseFallback({ view, timer }: { view: RoomView; timer?: TimerInfo }) {
       <p>{view.narrator || "La partie continue. En attente de la prochaine action."}</p>
       {timer && <PhaseTimer timer={timer} compact />}
       <p className="muted">Phase actuelle : {phaseLabel(view.phase)}.</p>
+    </div>
+  );
+}
+
+function SpectatorPhasePanel({ view }: { view: RoomView }) {
+  return (
+    <div className="content spectator-panel">
+      <h2>Spectateur</h2>
+      <p>Vous êtes emprisonné. Vous ne pouvez plus agir dans la partie, mais vous pouvez continuer à discuter.</p>
+      {view.phase === "MAYOR_NOMINATION" && <PublicVoteBoard title="Nominations Maire publiques" emptyText="Aucune candidature proposee." details={view.mayorNominationDetails} totals={view.mayorNominationTotals} verb="propose" />}
+      {view.phase === "MAYOR_ELECTION" && <PublicVoteBoard title="Votes du Maire" emptyText="Aucun vote enregistre." details={view.mayorVoteDetails} totals={view.mayorVoteTotals} verb="vote pour" />}
+      {["NOMINATION", "DEFENSE_REQUESTS", "DEFENSE", "VOTING"].includes(view.phase) && <PublicVoteBoard title="Nominations publiques" emptyText="Aucune nomination enregistree." details={view.nominationDetails} totals={view.nominationTotals} verb="nomine" />}
+      {view.phase === "VOTING" && <PublicVoteBoard title="Votes publics" emptyText="Aucun vote enregistre." details={view.voteDetails} totals={view.voteTotals} verb="vote contre" weighted />}
+      {view.phase === "NIGHT" && <p className="muted">La nuit est confidentielle. Vous pourrez reprendre le canal principal au retour du jour.</p>}
     </div>
   );
 }
@@ -876,6 +891,8 @@ function Lobby({ view }: { view: RoomView }) {
   const [botDraft, setBotDraft] = useState(view.botAi.config);
   const [editing, setEditing] = useState(false);
   const canStart = view.lobby.playerCount >= view.lobby.minPlayers;
+  const maxBotsForRoom = Math.min(view.botAi.maxPerRoom, Math.max(0, view.lobby.maxPlayers - view.lobby.humanCount));
+  const canAddMoreBots = view.botAi.enabled && view.botAi.config.enabled && view.lobby.botCount < maxBotsForRoom && view.lobby.playerCount < view.lobby.maxPlayers;
 
   useEffect(() => setDraft(view.config), [view.config]);
   useEffect(() => setBotDraft(view.botAi.config), [view.botAi.config]);
@@ -891,15 +908,42 @@ function Lobby({ view }: { view: RoomView }) {
   const closeRoom = () => {
     if (window.confirm("Fermer le salon pour tous les joueurs ?")) socket.emit("closeRoom", { code: view.code });
   };
+  const removeParticipant = (player: RoomView["players"][number]) => {
+    if (!window.confirm(`Retirer ${player.name} du salon ?`)) return;
+    socket.emit("removeParticipant", { code: view.code, playerId: player.id });
+  };
 
   return (
     <div className="content">
       <h2>Lobby</h2>
       <div className="stats-grid">
-        <Metric label="Joueurs" value={`${view.lobby.playerCount} / ${view.lobby.maxPlayers}`} />
+        <Metric label="Humains" value={`${view.lobby.humanCount}`} />
+        <Metric label="Bots" value={`${view.lobby.botCount}`} />
+        <Metric label="Total" value={`${view.lobby.playerCount}`} />
+        <Metric label="Max joueurs" value={`${view.lobby.maxPlayers}`} />
         <Metric label="Manquants" value={view.lobby.missingPlayers === 0 ? "Pret" : `${view.lobby.missingPlayers}`} />
         <Metric label="Infiltres prevus" value={`${view.lobby.plannedInfiltrators}`} />
+        <Metric label="Limite bots serveur" value={`${view.botAi.maxPerRoom}`} />
         <Metric label="Egalite" value={view.config.tieRule === "revote" ? "Revote" : "Aucun elimine"} />
+      </div>
+      <div>
+        <h3>Participants</h3>
+        <div className="players lobby-players">
+          {view.players.map((player) => (
+            <div className="player" key={player.id}>
+              <span>{player.name}{player.isBot ? " - IA" : ""}{player.isHost ? " - Hote" : ""}</span>
+              <small>
+                {player.isBot ? "bot ajoute" : player.connected ? "humain connecte" : "humain deconnecte"}
+                {player.audioActive ? " - audio actif" : ""}
+              </small>
+              {view.you?.isHost && player.id !== view.you.id && (
+                <div className="player-actions">
+                  <button className="danger" onClick={() => removeParticipant(player)}><Trash2 size={16} /> Retirer</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
       <div>
         <h3>Roles potentiels</h3>
@@ -913,7 +957,8 @@ function Lobby({ view }: { view: RoomView }) {
       )}
       {view.you?.isHost && view.botAi.enabled && (
         <div className="bot-controls">
-          <BotConfigEditor config={botDraft} onChange={saveBotConfig} maxPerRoom={view.botAi.maxPerRoom} />
+          <BotConfigEditor config={botDraft} onChange={saveBotConfig} maxPerRoom={maxBotsForRoom} serverMaxPerRoom={view.botAi.maxPerRoom} />
+          {view.botAi.config.enabled && !canAddMoreBots && <p className="muted">Impossible d'ajouter plus de bots : limite serveur ou max joueurs atteint.</p>}
         </div>
       )}
       {view.you?.isHost && editing && (
@@ -933,7 +978,7 @@ function Lobby({ view }: { view: RoomView }) {
   );
 }
 
-function BotConfigEditor({ config, onChange, maxPerRoom, compact = false }: { config: BotRoomConfig; onChange: (config: BotRoomConfig) => void; maxPerRoom: number; compact?: boolean }) {
+function BotConfigEditor({ config, onChange, maxPerRoom, serverMaxPerRoom = maxPerRoom, compact = false }: { config: BotRoomConfig; onChange: (config: BotRoomConfig) => void; maxPerRoom: number; serverMaxPerRoom?: number; compact?: boolean }) {
   const update = (patch: Partial<BotRoomConfig>) => {
     const next = mergeBotConfig({ ...config, ...patch });
     next.count = Math.min(next.count, maxPerRoom);
@@ -946,7 +991,7 @@ function BotConfigEditor({ config, onChange, maxPerRoom, compact = false }: { co
         <ConfigField label="Bots IA" help="Active ou desactive les bots pour ce salon.">
           <label><input type="checkbox" checked={config.enabled} onChange={(e) => update({ enabled: e.target.checked })} /> Activer</label>
         </ConfigField>
-        <ConfigField label="Nombre de bots" help={`Nombre de bots maintenus dans le lobby. Maximum serveur : ${maxPerRoom}.`}>
+        <ConfigField label="Nombre de bots" help={`Nombre de bots maintenus dans le lobby. Maximum actuel : ${maxPerRoom}. Maximum serveur : ${serverMaxPerRoom}.`}>
           <NumericConfigInput value={config.count} min={0} max={maxPerRoom} onCommit={(value) => update({ count: value })} />
         </ConfigField>
         <ConfigField label="Completion auto" help="Ajoute ou retire automatiquement des bots pour atteindre le minimum de joueurs.">
@@ -1310,7 +1355,7 @@ function PowerNotice({ view }: { view: RoomView }) {
 function ChatPanel({ view }: { view: RoomView }) {
   const [text, setText] = useState("");
   const me = currentPlayer(view);
-  const canChat = !!view.you?.alive && !!view.you.canSpeak && !me?.muted && !(view.phase === "NIGHT" && view.you.role !== "Infiltre");
+  const canChat = !!view.you?.canSpeak && !me?.muted && !(view.phase === "NIGHT" && view.you.role !== "Infiltre");
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     const clean = text.trim();
@@ -1706,7 +1751,10 @@ function canHearRemote(view: RoomView, fromPlayerId: string) {
   if (view.audioMode !== "integrated" || !view.you?.canHearAudio || !view.you.audioPeerIds.includes(fromPlayerId)) return false;
   if (view.phase === "LOBBY") return true;
   if (view.phase === "NIGHT") return view.currentNightStep === "infiltres" && view.you.role === "Infiltre";
-  if (view.phase === "DEFENSE") return view.activePlayerId === fromPlayerId;
+  if (view.phase === "DEFENSE") {
+    const speaker = view.players.find((player) => player.id === fromPlayerId);
+    return view.activePlayerId === fromPlayerId || (!!speaker && !speaker.alive && !speaker.isBot);
+  }
   if (["MAYOR_NOMINATION", "MAYOR_ELECTION", "DAY_ANNOUNCEMENT", "DEBATE", "NOMINATION", "DEFENSE_REQUESTS", "VOTING", "RESULT"].includes(view.phase)) return true;
   return false;
 }
