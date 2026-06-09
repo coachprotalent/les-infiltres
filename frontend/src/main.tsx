@@ -39,6 +39,22 @@ const roomKey = "les-infiltres-room";
 const adminTokenKey = "les-infiltres-admin-token";
 const phaseTutorialKey = "les-infiltres-phase-tutorial-seen";
 
+// Les voix de la synthèse vocale se chargent de façon asynchrone : on les met en cache
+// et on rafraîchit le cache quand le navigateur signale qu'elles sont disponibles.
+let narratorVoices: SpeechSynthesisVoice[] = [];
+if (typeof window !== "undefined" && "speechSynthesis" in window) {
+  const loadVoices = () => {
+    narratorVoices = window.speechSynthesis.getVoices();
+  };
+  loadVoices();
+  window.speechSynthesis.addEventListener?.("voiceschanged", loadVoices);
+}
+
+// Synthèse serveur (Azure) optionnelle : activée selon la config serveur, sinon
+// on retombe sur la voix du navigateur.
+let narratorTtsEnabled = false;
+let narrationAudio: HTMLAudioElement | null = null;
+
 function App() {
   const [view, setView] = useState<RoomView | null>(null);
   const [toast, setToast] = useState("");
@@ -76,6 +92,7 @@ function App() {
     socket.emit("getServerSettings", (settings) => {
       setServerSettings(settings);
       setBotConfig(settings.botAi.defaults);
+      narratorTtsEnabled = settings.narratorTts?.enabled ?? false;
     });
     return () => {
       socket.off("roomState");
@@ -329,20 +346,15 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
   }, [view.transition, view.round]);
 
   useEffect(() => {
-    if (!voiceEnabled || !("speechSynthesis" in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(view.narrator);
-    utterance.lang = "fr-FR";
-    utterance.rate = 0.92;
-    utterance.pitch = 0.82;
-    window.speechSynthesis.speak(utterance);
+    if (!voiceEnabled) return;
+    speakNarration(view.narrator, view.phase, view.transition);
   }, [voiceEnabled, view.narrator]);
 
   const toggleVoice = () => {
     const next = !voiceEnabled;
     setVoiceEnabled(next);
     localStorage.setItem("les-infiltres-voice", next ? "on" : "off");
-    if (!next && "speechSynthesis" in window) window.speechSynthesis.cancel();
+    if (!next) stopNarration();
   };
   const quit = () => {
     const label = view.phase === "LOBBY" ? "Quitter le salon" : "Quitter la partie";
@@ -1826,6 +1838,81 @@ function formatSeconds(seconds: number) {
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
   return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
+function pickNarratorVoice(): SpeechSynthesisVoice | undefined {
+  const voices = narratorVoices.length ? narratorVoices : window.speechSynthesis.getVoices();
+  const french = voices.filter((voice) => /^fr/i.test(voice.lang));
+  if (!french.length) return undefined;
+  // On privilégie une voix française de qualité (neural/Google), grave de préférence,
+  // adaptée à un conteur de jeu d'ambiance.
+  const score = (voice: SpeechSynthesisVoice) => {
+    const name = voice.name.toLowerCase();
+    let value = 0;
+    if (/fr-fr/i.test(voice.lang)) value += 4;
+    if (/(natural|neural|enhanced|premium|wavenet)/.test(name)) value += 9;
+    if (/google/.test(name)) value += 6;
+    if (/(thomas|paul|henri|r[ée]mi|nicolas|claude|mathieu|guillaume)/.test(name)) value += 4;
+    if (/(am[ée]lie|audrey|julie|hortense|denise|charlotte|l[ée]a|virginie)/.test(name)) value += 2;
+    if (voice.localService === false) value += 2;
+    return value;
+  };
+  return [...french].sort((a, b) => score(b) - score(a))[0];
+}
+
+function stopNarration() {
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  if (narrationAudio) {
+    narrationAudio.pause();
+    narrationAudio = null;
+  }
+}
+
+async function speakNarration(text: string, phase: RoomView["phase"], transition?: RoomView["transition"]) {
+  if (!text) return;
+  stopNarration();
+  // Voix studio Azure si le serveur l'a activée ; sinon repli sur la voix du navigateur.
+  if (narratorTtsEnabled) {
+    try {
+      const response = await fetch("/api/narration/speech", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text, phase })
+      });
+      if (response.ok) {
+        const blob = await response.blob();
+        if (blob.size) {
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          narrationAudio = audio;
+          const cleanup = () => URL.revokeObjectURL(url);
+          audio.onended = cleanup;
+          audio.onerror = cleanup;
+          await audio.play();
+          return;
+        }
+      }
+    } catch {
+      // Repli silencieux sur la voix du navigateur.
+    }
+  }
+  speakWithBrowser(text, phase, transition);
+}
+
+function speakWithBrowser(text: string, phase: RoomView["phase"], transition?: RoomView["transition"]) {
+  if (!("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  const voice = pickNarratorVoice();
+  if (voice) utterance.voice = voice;
+  utterance.lang = voice?.lang ?? "fr-FR";
+  const night = phase === "NIGHT" || transition === "night-falls";
+  const solemn = phase === "GAME_OVER";
+  // Ton de conteur : grave et posé, plus encore la nuit ou en fin de partie.
+  utterance.rate = night ? 0.8 : solemn ? 0.84 : 0.9;
+  utterance.pitch = night ? 0.68 : solemn ? 0.72 : 0.8;
+  utterance.volume = 1;
+  window.speechSynthesis.speak(utterance);
 }
 
 function playAmbienceCue(kind: RoomView["phase"] | NonNullable<RoomView["transition"]>) {

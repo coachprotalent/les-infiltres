@@ -41,6 +41,22 @@ app.post("/api/rooms/:roomCode/finish-defense", (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/narration/speech", async (req, res) => {
+  try {
+    const text = typeof req.body?.text === "string" ? req.body.text : "";
+    const phase = typeof req.body?.phase === "string" ? req.body.phase : "";
+    if (!text) return res.status(400).json({ ok: false, error: "text requis." });
+    const result = await store.synthesizeNarration(text, phase);
+    if (!result) return res.status(204).end();
+    res.setHeader("Content-Type", result.contentType);
+    res.setHeader("Cache-Control", "no-store");
+    res.send(result.audio);
+  } catch (error) {
+    console.error("[NarratorTTS] erreur route :", error instanceof Error ? error.message : error);
+    res.status(502).json({ ok: false, error: "Synthese du narrateur indisponible." });
+  }
+});
+
 const publicDir = path.resolve(__dirname, "../../frontend/dist");
 app.use(express.static(publicDir));
 app.get("*", (_req, res) => {

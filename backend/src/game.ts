@@ -3,6 +3,8 @@ import type { AdminRoomDetails, AdminRoomSummary, AudioMode, BotRoomConfig, BotV
 import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, mergeBotConfig, mergeConfig } from "@les-infiltres/shared";
 import { BotRealtimeAIService, type BotAIContext, type BotAllowedAction, type BotDecision } from "./botRealtimeAI.js";
 import { NarrationService } from "./narration.js";
+import { personaDebateLines, personaMayorReason, personaReplyLines, personaVoteReason } from "./botPersonas.js";
+import { NarratorTtsService } from "./narratorTts.js";
 
 type Player = {
   id: string;
@@ -229,6 +231,7 @@ export class GameStore {
   private onToast: (socketId: string, message: string) => void = () => undefined;
   private onClose: (socketId: string, message: string) => void = () => undefined;
   private botAi = new BotRealtimeAIService();
+  private narratorTts = new NarratorTtsService();
 
   constructor() {
     const sweeper = setInterval(() => this.sweepRooms(), 60_000);
@@ -254,8 +257,13 @@ export class GameStore {
         maxPerRoom: this.botAi.maxPerRoom,
         audioEnabled: this.botAi.audioEnabled,
         defaults: this.botAi.defaults
-      }
+      },
+      narratorTts: this.narratorTts.clientConfig()
     };
+  }
+
+  synthesizeNarration(text: string, phase: string) {
+    return this.narratorTts.synthesize(text, phase);
   }
 
   createRoom(name: string, audioMode: AudioMode, socketId: string, sessionId = randomId(), config?: Partial<GameConfig>, botConfig?: Partial<BotRoomConfig>): RoomView {
@@ -1657,7 +1665,7 @@ export class GameStore {
     if (allowedActions.includes("voteMayor")) {
       const candidates = room.mayorNominees.length ? mayorTargets.filter((p) => room.mayorNominees.includes(p.id)) : mayorTargets;
       const target = pickBotTarget(candidates);
-      return target ? { action: "voteMayor", targetPlayerId: target.id, reason: `${target.name} me semble capable de tenir la salle.` } : undefined;
+      return target ? { action: "voteMayor", targetPlayerId: target.id, reason: personaMayorReason(this.ensureBotBrain(room, bot), target.name) } : undefined;
     }
     if (allowedActions.includes("nominate")) {
       const target = pickBotTarget(aliveTargets);
@@ -1670,18 +1678,15 @@ export class GameStore {
           ? aliveTargets.filter((p) => room.nominees.includes(p.id))
           : aliveTargets;
       const target = pickBotTarget(candidates);
-      return target ? { action: "vote", targetPlayerId: target.id, reason: `${target.name} reste le plus suspect pour moi.` } : undefined;
+      return target ? { action: "vote", targetPlayerId: target.id, reason: personaVoteReason(this.ensureBotBrain(room, bot), target.name) } : undefined;
     }
     if (allowedActions.includes("nightAction")) return this.fallbackBotNightDecision(room, bot);
     if (allowedActions.includes("speak")) {
       const brain = this.ensureBotBrain(room, bot);
       const suspect = highestSuspicion(room, brain);
-      return {
-        action: "speak",
-        message: suspect
-          ? `Je ne vais pas voter au hasard. Pour l'instant, ${suspect.name} m'inquiete surtout par ses reactions: il y a quelque chose de trop controle, et j'aimerais l'entendre expliquer son dernier choix.`
-          : "Je prefere qu'on ne remplisse pas le silence avec des accusations faciles. Quelqu'un peut reprendre clairement son raisonnement depuis le debut du tour ?"
-      };
+      const pool = personaDebateLines(brain, suspect?.name);
+      const message = firstUnusedBotMessage(room, bot, pool) ?? pool[0] ?? "Je préfère observer encore un peu avant de me prononcer.";
+      return { action: "speak", message };
     }
     return undefined;
   }
@@ -1690,12 +1695,8 @@ export class GameStore {
     const source = room.chatMessages.find((message) => message.id === messageId);
     const brain = this.ensureBotBrain(room, bot);
     const suspect = highestSuspicion(room, brain);
-    const variants = [
-      `${source?.playerName ?? "Je t'entends"}, je ne vais pas me defendre avec une phrase vide. Ce qui me gene, c'est ${suspect?.name ?? "la maniere dont le debat se deplace"}: on change de cible sans vraie raison.`,
-      `Je comprends le soupcon, mais il faut etre coherent. Si vous m'accusez, dites sur quel fait precis; sinon je prefere qu'on revienne sur ${suspect?.name ?? "les votes publics"}.`,
-      `Bonne question. Mon impression actuelle, c'est que ${suspect?.name ?? "les reactions rapides"} merite qu'on insiste un peu, parce que les reponses deviennent trop prudentes.`
-    ];
-    const message = firstUnusedBotMessage(room, bot, variants) ?? variants[0];
+    const pool = personaReplyLines(brain, source?.playerName, suspect?.name);
+    const message = firstUnusedBotMessage(room, bot, pool) ?? pool[0] ?? "Accuse-moi sur un fait précis, sinon je préfère qu'on revienne au débat.";
     return { action: "speak", message };
   }
 

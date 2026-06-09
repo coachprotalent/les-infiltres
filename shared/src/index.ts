@@ -263,6 +263,9 @@ export type ServerSettings = {
     audioEnabled: boolean;
     defaults: BotRoomConfig;
   };
+  narratorTts: {
+    enabled: boolean;
+  };
 };
 
 export type AdminResult<T = undefined> =
