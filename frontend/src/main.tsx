@@ -85,7 +85,7 @@ function App() {
   }, []);
 
   const create = () => {
-    if (!name.trim()) return setToast("Entre ton nom.");
+    if (!name.trim()) return setToast("Entrez votre nom.");
     socket.emit("createRoom", { name, audioMode, config, botConfig, sessionId: localStorage.getItem(sessionKey) ?? undefined }, (next) => {
       persist(next);
       setView(next);
@@ -93,7 +93,7 @@ function App() {
   };
 
   const join = () => {
-    if (!name.trim() || !code.trim()) return setToast("Entre ton nom et le code.");
+    if (!name.trim() || !code.trim()) return setToast("Entrez votre nom et le code.");
     socket.emit("joinRoom", { code, name, sessionId: localStorage.getItem(sessionKey) ?? undefined }, (result) => {
       if (!result.ok) return setToast(result.error);
       persist(result.view);
@@ -106,9 +106,9 @@ function App() {
     return (
       <main className="shell home">
         <section className="brand">
-          <span className="eyebrow">Roles caches et debat public</span>
-          <h1>Les Infiltres</h1>
-          <p>Le serveur distribue les roles, verrouille les secrets, gere les pouvoirs et verifie automatiquement la victoire.</p>
+          <span className="eyebrow">Rôles cachés et débat public</span>
+          <h1>Les Infiltrés</h1>
+          <p>Le serveur distribue les rôles, verrouille les secrets, gère les pouvoirs et vérifie automatiquement la victoire.</p>
         </section>
         <section className="entry">
           <label>
@@ -117,18 +117,18 @@ function App() {
           </label>
           <div className="mode">
             <button className={audioMode === "external" ? "selected" : ""} onClick={() => setAudioMode("external")}>Audio externe</button>
-            <button className={audioMode === "integrated" ? "selected" : ""} onClick={() => setAudioMode("integrated")}>Audio integre MVP</button>
+            <button className={audioMode === "integrated" ? "selected" : ""} onClick={() => setAudioMode("integrated")}>Audio intégré (MVP)</button>
           </div>
           <ConfigEditor config={config} onChange={setConfig} compact />
           {serverSettings?.botAi.enabled && <BotConfigEditor config={botConfig} onChange={setBotConfig} maxPerRoom={serverSettings.botAi.maxPerRoom} />}
-          <button className="primary" onClick={create}><Play size={18} /> Creer une partie</button>
+          <button className="primary" onClick={create}><Play size={18} /> Créer une partie</button>
           <div className="join">
             <input value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="CODE" maxLength={5} />
             <button onClick={join}>Rejoindre</button>
           </div>
           <button className="admin-link" onClick={() => setAdminOpen(true)}><Lock size={16} /> Administration</button>
           {toast && <p className="toast">{toast}</p>}
-          <p className="muted">Le choix audio ne bloque jamais la creation du salon. Le micro se teste apres creation, dans le lobby.</p>
+          <p className="muted">Le choix audio ne bloque jamais la création du salon. Le micro se teste après création, dans le lobby.</p>
         </section>
       </main>
     );
@@ -203,10 +203,10 @@ function AdminPage({ onBack }: { onBack: () => void }) {
   };
 
   const deleteRoom = (room: AdminRoomSummary) => {
-    if (!window.confirm(`Supprimer le salon ${room.code} ? Tous les joueurs seront renvoyes a l'accueil.`)) return;
+    if (!window.confirm(`Supprimer le salon ${room.code} ? Tous les joueurs seront renvoyés à l'accueil.`)) return;
     socket.emit("adminDeleteRoom", { token, code: room.code }, (result) => {
       if (!result.ok) return setMessage(result.error);
-      setMessage(`Salon ${room.code} supprime.`);
+      setMessage(`Salon ${room.code} supprimé.`);
       setDetails(null);
       loadRooms();
     });
@@ -245,7 +245,7 @@ function AdminPage({ onBack }: { onBack: () => void }) {
           </div>
           <div className="actions-row">
             <button onClick={() => loadRooms()} disabled={loading}><RefreshCw size={16} /> Refresh</button>
-            <button onClick={logout}><LogOut size={16} /> Deconnexion</button>
+            <button onClick={logout}><LogOut size={16} /> Déconnexion</button>
             <button onClick={onBack}><ArrowLeft size={16} /> Accueil</button>
           </div>
         </div>
@@ -255,12 +255,12 @@ function AdminPage({ onBack }: { onBack: () => void }) {
             <thead>
               <tr>
                 <th>Code</th>
-                <th>Hote</th>
+                <th>Hôte</th>
                 <th>Joueurs</th>
                 <th>Statut</th>
                 <th>Audio</th>
                 <th>Bots IA</th>
-                <th>Creation</th>
+                <th>Création</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -271,12 +271,12 @@ function AdminPage({ onBack }: { onBack: () => void }) {
                   <td>{room.hostName}</td>
                   <td>{room.connectedPlayers} / {room.playerCount}</td>
                   <td>{adminStatusLabel(room.status)}</td>
-                  <td>{room.audioMode === "integrated" ? "integre" : "externe"}</td>
+                  <td>{room.audioMode === "integrated" ? "intégré" : "externe"}</td>
                   <td>{room.botAi.enabled && room.botAi.config.enabled ? `${room.botAi.config.count}${room.botAi.config.autoFill ? " + auto" : ""}` : "off"}</td>
                   <td>{new Date(room.createdAt).toLocaleString()}</td>
                   <td>
                     <div className="admin-actions">
-                      <button onClick={() => showDetails(room.code)}><Eye size={16} /> Voir details</button>
+                      <button onClick={() => showDetails(room.code)}><Eye size={16} /> Voir détails</button>
                       <button className="danger" onClick={() => deleteRoom(room)}><Trash2 size={16} /> Supprimer</button>
                     </div>
                   </td>
@@ -292,14 +292,14 @@ function AdminPage({ onBack }: { onBack: () => void }) {
         </div>
         {details && (
           <div className="admin-details">
-            <h2>Details du salon {details.code}</h2>
+            <h2>Détails du salon {details.code}</h2>
             <p>Phase : {phaseLabel(details.phase)} - Tour {details.round}</p>
-            <p>Bots IA : {details.botAi.enabled && details.botAi.config.enabled ? `actifs, ${details.botAi.config.count} bot(s), participation ${participationLabel(details.botAi.config.participation)}` : "desactives"}</p>
+            <p>Bots IA : {details.botAi.enabled && details.botAi.config.enabled ? `actifs, ${details.botAi.config.count} bot(s), participation ${participationLabel(details.botAi.config.participation)}` : "désactivés"}</p>
             <div className="players">
               {details.players.map((player) => (
                 <div className={`player ${player.alive ? "" : "out"}`} key={player.id}>
-                  <span>{player.name}{player.isBot ? " - IA" : ""}{player.isHost ? " - Hote" : ""}{player.isMayor ? " - Maire" : ""}</span>
-                  <small>{player.connected ? "en ligne" : "deconnecte"} - {player.alive ? "en jeu" : "elimine"}{player.botVoice ? ` - voix ${player.botVoice.voiceName}` : ""}</small>
+                  <span>{player.name}{player.isBot ? " - IA" : ""}{player.isHost ? " - Hôte" : ""}{player.isMayor ? " - Maire" : ""}</span>
+                  <small>{player.connected ? "en ligne" : "déconnecté"} - {player.alive ? "en jeu" : "éliminé"}{player.botVoice ? ` - voix ${player.botVoice.voiceName}` : ""}</small>
                 </div>
               ))}
             </div>
@@ -348,7 +348,7 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
     const label = view.phase === "LOBBY" ? "Quitter le salon" : "Quitter la partie";
     const hostLobby = view.phase === "LOBBY" && !!you?.isHost;
     const message = hostLobby
-      ? "Vous etes l'hote. Quitter transferera le salon au prochain joueur, ou fermera le salon si vous etes seul. Continuer ?"
+      ? "Vous êtes l'hôte. Quitter transférera le salon au prochain joueur, ou fermera le salon si vous êtes seul. Continuer ?"
       : `${label} ?`;
     if (!window.confirm(message)) return;
     socket.emit("leaveRoom", { code: view.code });
@@ -401,9 +401,9 @@ function Game({ view, toast, onToast, onLeaveRoom }: { view: RoomView; toast: st
           <div className="players">
             {view.players.map((player) => (
               <div className={`player ${player.alive ? "" : "out"} ${player.speaking ? "speaking" : ""} ${player.audioActive ? "audio-active" : ""}`} key={player.id}>
-                <span>{player.name}{player.isBot ? " - IA" : ""}{player.isMayor ? " - Maire" : ""}{player.isHost ? " - Hote" : ""}</span>
+                <span>{player.name}{player.isBot ? " - IA" : ""}{player.isMayor ? " - Maire" : ""}{player.isHost ? " - Hôte" : ""}</span>
                 <small>
-                  {player.connected ? "en ligne" : "deconnecte"}
+                  {player.connected ? "en ligne" : "déconnecté"}
                   {!player.canVote && player.alive ? " - sans vote" : ""}
                   {!player.alive && player.revealedRole ? ` - ${ROLE_LABELS[player.revealedRole]}` : ""}
                 </small>
@@ -474,10 +474,10 @@ function SpectatorPhasePanel({ view }: { view: RoomView }) {
     <div className="content spectator-panel">
       <h2>Spectateur</h2>
       <p>Vous êtes emprisonné. Vous ne pouvez plus agir dans la partie, mais vous pouvez continuer à discuter.</p>
-      {view.phase === "MAYOR_NOMINATION" && <PublicVoteBoard title="Nominations Maire publiques" emptyText="Aucune candidature proposee." details={view.mayorNominationDetails} totals={view.mayorNominationTotals} verb="propose" />}
-      {view.phase === "MAYOR_ELECTION" && <PublicVoteBoard title="Votes du Maire" emptyText="Aucun vote enregistre." details={view.mayorVoteDetails} totals={view.mayorVoteTotals} verb="vote pour" />}
-      {["NOMINATION", "DEFENSE_REQUESTS", "DEFENSE", "VOTING"].includes(view.phase) && <PublicVoteBoard title="Nominations publiques" emptyText="Aucune nomination enregistree." details={view.nominationDetails} totals={view.nominationTotals} verb="nomine" />}
-      {view.phase === "VOTING" && <PublicVoteBoard title="Votes publics" emptyText="Aucun vote enregistre." details={view.voteDetails} totals={view.voteTotals} verb="vote contre" weighted />}
+      {view.phase === "MAYOR_NOMINATION" && <PublicVoteBoard title="Nominations Maire publiques" emptyText="Aucune candidature proposée." details={view.mayorNominationDetails} totals={view.mayorNominationTotals} verb="propose" />}
+      {view.phase === "MAYOR_ELECTION" && <PublicVoteBoard title="Votes du Maire" emptyText="Aucun vote enregistré." details={view.mayorVoteDetails} totals={view.mayorVoteTotals} verb="vote pour" />}
+      {["NOMINATION", "DEFENSE_REQUESTS", "DEFENSE", "VOTING"].includes(view.phase) && <PublicVoteBoard title="Nominations publiques" emptyText="Aucune nomination enregistrée." details={view.nominationDetails} totals={view.nominationTotals} verb="nomine" />}
+      {view.phase === "VOTING" && <PublicVoteBoard title="Votes publics" emptyText="Aucun vote enregistré." details={view.voteDetails} totals={view.voteTotals} verb="vote contre" weighted />}
       {view.phase === "NIGHT" && <p className="muted">La nuit est confidentielle. Vous pourrez reprendre le canal principal au retour du jour.</p>}
     </div>
   );
@@ -527,47 +527,47 @@ function readPhaseTutorialSeen(code: string) {
 function phaseTutorialFor(view: RoomView) {
   if (view.phase === "MAYOR_NOMINATION") return {
     title: "Nomination du Maire",
-    body: "Les joueurs vivants proposent publiquement les candidats au poste de Maire. Vous pouvez modifier votre nomination jusqu'a la fin du chrono.",
+    body: "Les joueurs vivants proposent publiquement les candidats au poste de Maire. Vous pouvez modifier votre nomination jusqu'à la fin du chrono.",
     short: "Nominations Maire : proposez ou modifiez votre candidat."
   };
   if (view.phase === "MAYOR_ELECTION") return {
     title: "Vote du Maire",
-    body: "Votez uniquement parmi les candidats nomines. Le joueur avec le plus de voix devient Maire et gerera la parole.",
-    short: "Vote Maire : choisissez parmi les candidats verrouilles."
+    body: "Votez uniquement parmi les candidats nominés. Le joueur avec le plus de voix devient Maire et gérera la parole.",
+    short: "Vote Maire : choisissez parmi les candidats verrouillés."
   };
   if (view.phase === "DEBATE") return {
-    title: "Debat",
-    body: "Pendant cette phase, les joueurs debattent afin d'identifier les suspects. Le Maire peut laisser la parole libre ou verrouiller les micros.",
-    short: "Debat : discutez, sauf si le Maire verrouille la parole."
+    title: "Débat",
+    body: "Pendant cette phase, les joueurs débattent afin d'identifier les suspects. Le Maire peut laisser la parole libre ou verrouiller les micros.",
+    short: "Débat : discutez, sauf si le Maire verrouille la parole."
   };
   if (view.phase === "NOMINATION") return {
     title: "Nomination",
-    body: "Choisissez les joueurs que vous souhaitez voir passer au vote. Les nominations sont publiques et modifiables jusqu'a la fin du chrono.",
-    short: "Nominations : designez les suspects."
+    body: "Choisissez les joueurs que vous souhaitez voir passer au vote. Les nominations sont publiques et modifiables jusqu'à la fin du chrono.",
+    short: "Nominations : désignez les suspects."
   };
   if (view.phase === "DEFENSE_REQUESTS" || view.phase === "DEFENSE") return {
-    title: "Defense",
-    body: "Les joueurs nomines peuvent demander au Maire l'autorisation de se defendre avant le vote.",
-    short: "Defense : les nomines demandent la parole au Maire."
+    title: "Défense",
+    body: "Les joueurs nominés peuvent demander au Maire l'autorisation de se défendre avant le vote.",
+    short: "Défense : les nominés demandent la parole au Maire."
   };
   if (view.phase === "VOTING") return {
     title: "Vote",
-    body: "Votez publiquement parmi les joueurs nomines. Les bonus du Sage et du Maire sont comptes au depouillement.",
-    short: "Vote : choisissez parmi les nomines."
+    body: "Votez publiquement parmi les joueurs nominés. Les bonus du Sage et du Maire sont comptés au dépouillement.",
+    short: "Vote : choisissez parmi les nominés."
   };
   if (view.phase === "NIGHT" && view.currentNightStep === "infiltres") return {
-    title: "Phase Infiltres",
-    body: "Les Infiltres choisissent secretement leur cible. Les autres joueurs voient des etats audio neutralises, sauf la Guetteuse qui peut observer au risque de s'exposer.",
-    short: "Infiltres : cible secrete, etats audio masques."
+    title: "Phase Infiltrés",
+    body: "Les Infiltrés choisissent secrètement leur cible. Les autres joueurs voient des états audio neutralisés, sauf la Guetteuse qui peut observer au risque de s'exposer.",
+    short: "Infiltrés : cible secrète, états audio masqués."
   };
   if (view.phase === "NIGHT" && view.activeRole === "Hackeuse") return {
     title: "Hackeuse",
-    body: "La Hackeuse peut enqueter sur un joueur et decouvrir secretement son role.",
-    short: "Hackeuse : enquetez sur un joueur."
+    body: "La Hackeuse peut enquêter sur un joueur et découvrir secrètement son rôle.",
+    short: "Hackeuse : enquêtez sur un joueur."
   };
   if (view.phase === "NIGHT") return {
     title: "Nuit",
-    body: "Les roles se reveillent un par un. Le joueur concerne peut agir ou terminer son tour sans attendre la fin du chrono.",
+    body: "Les rôles se réveillent un par un. Le joueur concerné peut agir ou terminer son tour sans attendre la fin du chrono.",
     short: "Nuit : agissez ou terminez votre tour."
   };
   return undefined;
@@ -693,7 +693,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
         .then(() => console.info("audio playback started"))
         .catch((error) => {
           console.warn("audio playback error", error);
-          onToast("Audio indisponible, reponse affichee en texte.");
+          onToast("Audio indisponible, réponse affichée en texte.");
         });
     };
     if (initiator) {
@@ -709,7 +709,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
     if (view.audioMode !== "integrated") return;
     if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
       setPermission("unsupported");
-      onToast("Navigateur non compatible avec l'audio integre.");
+      onToast("Navigateur non compatible avec l'audio intégré.");
       return;
     }
     setPermission("requesting");
@@ -719,7 +719,7 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
       if (!stream.getAudioTracks().length) {
         stream.getTracks().forEach((track) => track.stop());
         setPermission("missing");
-        onToast("Aucun micro detecte.");
+        onToast("Aucun micro détecté.");
         return;
       }
       localStreamRef.current = stream;
@@ -734,11 +734,11 @@ function useIntegratedAudio(view: RoomView, onToast: (message: string) => void) 
       if (name === "NotFoundError" || name === "DevicesNotFoundError") {
         setPermission("missing");
         console.info("microphone permission status", "missing");
-        onToast("Aucun micro detecte.");
+        onToast("Aucun micro détecté.");
       } else {
         setPermission("denied");
         console.info("microphone permission status", "denied");
-        onToast("Permission micro refusee.");
+        onToast("Permission micro refusée.");
       }
     }
   };
@@ -821,13 +821,13 @@ function useBotVoice(view: RoomView, onToast: (message: string) => void) {
     setStatus("enabled");
     console.info("speaker/audio context status", "bot voice enabled");
     if ("speechSynthesis" in window) {
-      const utterance = new SpeechSynthesisUtterance("Son des bots active.");
+      const utterance = new SpeechSynthesisUtterance("Son des bots activé.");
       utterance.lang = "fr-FR";
       utterance.volume = 0.75;
       window.speechSynthesis.speak(utterance);
     } else {
       setStatus("error");
-      onToast("Audio indisponible, reponse affichee en texte.");
+      onToast("Audio indisponible, réponse affichée en texte.");
     }
   };
 
@@ -846,7 +846,7 @@ function useBotVoice(view: RoomView, onToast: (message: string) => void) {
     console.info("bot response text received", { bot: message.playerName, text: message.text });
     if (!("speechSynthesis" in window)) {
       setStatus("error");
-      onToast("Audio indisponible, reponse affichee en texte.");
+      onToast("Audio indisponible, réponse affichée en texte.");
       return;
     }
     try {
@@ -865,7 +865,7 @@ function useBotVoice(view: RoomView, onToast: (message: string) => void) {
       utterance.onerror = (event) => {
         console.warn("audio playback error", event);
         setStatus("error");
-        onToast("Audio indisponible, reponse affichee en texte.");
+        onToast("Audio indisponible, réponse affichée en texte.");
       };
       console.info("bot selected voice", { bot: message.playerName, voiceName: voice?.voiceName, style: voice?.voiceStyle });
       console.info("bot audio response received", { bot: message.playerName, voiceName: voice?.voiceName });
@@ -873,7 +873,7 @@ function useBotVoice(view: RoomView, onToast: (message: string) => void) {
     } catch (error) {
       console.warn("audio playback error", error);
       setStatus("error");
-      onToast("Audio indisponible, reponse affichee en texte.");
+      onToast("Audio indisponible, réponse affichée en texte.");
     }
   }, [enabled, view.chatMessages, onToast]);
 
@@ -922,9 +922,9 @@ function Lobby({ view }: { view: RoomView }) {
         <Metric label="Total" value={`${view.lobby.playerCount}`} />
         <Metric label="Max joueurs" value={`${view.lobby.maxPlayers}`} />
         <Metric label="Manquants" value={view.lobby.missingPlayers === 0 ? "Pret" : `${view.lobby.missingPlayers}`} />
-        <Metric label="Infiltres prevus" value={`${view.lobby.plannedInfiltrators}`} />
+        <Metric label="Infiltrés prévus" value={`${view.lobby.plannedInfiltrators}`} />
         <Metric label="Limite bots serveur" value={`${view.botAi.maxPerRoom}`} />
-        <Metric label="Egalite" value={view.config.tieRule === "revote" ? "Revote" : "Aucun elimine"} />
+        <Metric label="Égalité" value={view.config.tieRule === "revote" ? "Revote" : "Aucun éliminé"} />
       </div>
       <div>
         <h3>Participants</h3>
@@ -933,7 +933,7 @@ function Lobby({ view }: { view: RoomView }) {
             <div className="player" key={player.id}>
               <span>{player.name}{player.isBot ? " - IA" : ""}{player.isHost ? " - Hote" : ""}</span>
               <small>
-                {player.isBot ? "bot ajoute" : player.connected ? "humain connecte" : "humain deconnecte"}
+                {player.isBot ? "bot ajouté" : player.connected ? "humain connecté" : "humain déconnecté"}
                 {player.audioActive ? " - audio actif" : ""}
               </small>
               {view.you?.isHost && player.id !== view.you.id && (
@@ -946,7 +946,7 @@ function Lobby({ view }: { view: RoomView }) {
         </div>
       </div>
       <div>
-        <h3>Roles potentiels</h3>
+        <h3>Rôles potentiels</h3>
         <div className="chips">{view.lobby.potentialRoles.map((role) => <span key={role}>{ROLE_LABELS[role]}</span>)}</div>
       </div>
       {view.you?.isHost && (
@@ -972,7 +972,7 @@ function Lobby({ view }: { view: RoomView }) {
           <Play size={18} /> Lancer la partie
         </button>
       ) : (
-        <p className="muted">En attente du lancement par l'hote.</p>
+        <p className="muted">En attente du lancement par l'hôte.</p>
       )}
     </div>
   );
@@ -988,33 +988,33 @@ function BotConfigEditor({ config, onChange, maxPerRoom, serverMaxPerRoom = maxP
     <div className={`config bot-config ${compact ? "compact" : ""}`}>
       <h3><Users size={16} /> Configuration des Bots IA</h3>
       <div className="config-grid">
-        <ConfigField label="Bots IA" help="Active ou desactive les bots pour ce salon.">
+        <ConfigField label="Bots IA" help="Active ou désactive les bots pour ce salon.">
           <label><input type="checkbox" checked={config.enabled} onChange={(e) => update({ enabled: e.target.checked })} /> Activer</label>
         </ConfigField>
         <ConfigField label="Nombre de bots" help={`Nombre de bots maintenus dans le lobby. Maximum actuel : ${maxPerRoom}. Maximum serveur : ${serverMaxPerRoom}.`}>
           <NumericConfigInput value={config.count} min={0} max={maxPerRoom} onCommit={(value) => update({ count: value })} />
         </ConfigField>
-        <ConfigField label="Completion auto" help="Ajoute ou retire automatiquement des bots pour atteindre le minimum de joueurs.">
+        <ConfigField label="Complétion auto" help="Ajoute ou retire automatiquement des bots pour atteindre le minimum de joueurs.">
           <label><input type="checkbox" checked={config.autoFill} onChange={(e) => update({ autoFill: e.target.checked })} /> Completer la room</label>
         </ConfigField>
-        <ConfigField label="Participation" help="Frequence et temperature des interventions IA.">
+        <ConfigField label="Participation" help="Fréquence et température des interventions IA.">
           <select value={config.participation} onChange={(e) => update({ participation: e.target.value as BotRoomConfig["participation"] })}>
             <option value="discreet">discret</option>
             <option value="normal">normal</option>
             <option value="talkative">talkative</option>
           </select>
         </ConfigField>
-        <ConfigField label="Voix IA" help="Prepare la voix IA des bots. Le MVP reste texte si desactive.">
+        <ConfigField label="Voix IA" help="Prépare la voix IA des bots. Le MVP reste texte si désactivé.">
           <label><input type="checkbox" checked={config.audioEnabled} onChange={(e) => update({ audioEnabled: e.target.checked })} /> Activer</label>
         </ConfigField>
-        <ConfigField label="Temps reponse" help="Temps moyen avant qu'un bot agisse, en millisecondes.">
+        <ConfigField label="Temps réponse" help="Temps moyen avant qu'un bot agisse, en millisecondes.">
           <NumericConfigInput value={config.averageResponseMs} min={250} max={10000} step={250} onCommit={(value) => update({ averageResponseMs: value })} />
         </ConfigField>
       </div>
       {!compact && (
         <div className="toggles">
           <label><input type="checkbox" checked={config.allowMayor} onChange={(e) => update({ allowMayor: e.target.checked })} /> Bots candidats Maire</label>
-          <label><input type="checkbox" checked={config.allowDebateSpeech} onChange={(e) => update({ allowDebateSpeech: e.target.checked })} /> Bots parlent en debat</label>
+          <label><input type="checkbox" checked={config.allowDebateSpeech} onChange={(e) => update({ allowDebateSpeech: e.target.checked })} /> Bots parlent en débat</label>
           <label><input type="checkbox" checked={config.allowAudio} onChange={(e) => update({ allowAudio: e.target.checked })} /> Bots utilisent l'audio</label>
         </div>
       )}
@@ -1034,30 +1034,30 @@ function ConfigEditor({ config, onChange, compact = false }: { config: GameConfi
 
   return (
     <div className={`config ${compact ? "compact" : ""}`}>
-      <h3><Settings size={16} /> Configuration avancee</h3>
+      <h3><Settings size={16} /> Configuration avancée</h3>
       <div className="config-grid">
-        <ConfigField label="Max joueurs" help="Nombre maximum de joueurs autorises dans la partie.">
+        <ConfigField label="Max joueurs" help="Nombre maximum de joueurs autorisés dans la partie.">
           <NumericConfigInput value={config.maxPlayers} min={7} max={20} onCommit={(value) => update({ maxPlayers: value })} />
         </ConfigField>
-        <ConfigField label="Egalite" help="Regle appliquee si un vote finit a egalite. Aucun elimine signifie que personne n'est emprisonne.">
-          <select value={config.tieRule} onChange={(e) => update({ tieRule: e.target.value === "revote" ? "revote" : "none" })}><option value="none">Aucun elimine</option><option value="revote">Revote</option></select>
+        <ConfigField label="Égalité" help="Règle appliquée si un vote finit à égalité. Aucun éliminé signifie que personne n'est emprisonné.">
+          <select value={config.tieRule} onChange={(e) => update({ tieRule: e.target.value === "revote" ? "revote" : "none" })}><option value="none">Aucun éliminé</option><option value="revote">Revote</option></select>
         </ConfigField>
-        <ConfigField label="Election du Maire" help="Duree en secondes de l'election publique du Maire.">
+        <ConfigField label="Élection du Maire" help="Durée en secondes de l'élection publique du Maire.">
           <NumericConfigInput value={config.durations.mayorElection} min={10} max={600} step={5} onCommit={(value) => update({ durations: { ...config.durations, mayorElection: value } })} />
         </ConfigField>
-        <ConfigField label="Action de nuit" help="Duree maximum en secondes pour chaque role appele pendant la nuit.">
+        <ConfigField label="Action de nuit" help="Durée maximum en secondes pour chaque rôle appelé pendant la nuit.">
           <NumericConfigInput value={config.durations.nightAction} min={5} max={60} step={5} onCommit={(value) => update({ durations: { ...config.durations, nightAction: value } })} />
         </ConfigField>
-        <ConfigField label="Debat" help="Duree en secondes du debat general pendant la journee.">
+        <ConfigField label="Débat" help="Durée en secondes du débat général pendant la journée.">
           <NumericConfigInput value={config.durations.freeDebate} min={15} max={3600} step={5} onCommit={(value) => update({ durations: { ...config.durations, freeDebate: value } })} />
         </ConfigField>
-        <ConfigField label="Nominations" help="Duree en secondes de l'etape de nomination avant le vote.">
+        <ConfigField label="Nominations" help="Durée en secondes de l'étape de nomination avant le vote.">
           <NumericConfigInput value={config.durations.nomination} min={10} max={600} step={5} onCommit={(value) => update({ durations: { ...config.durations, nomination: value } })} />
         </ConfigField>
-        <ConfigField label="Defense" help="Duree en secondes accordee a un joueur pour se defendre.">
+        <ConfigField label="Défense" help="Durée en secondes accordée à un joueur pour se défendre.">
           <NumericConfigInput value={config.durations.defense} min={10} max={600} step={5} onCommit={(value) => update({ durations: { ...config.durations, defense: value } })} />
         </ConfigField>
-        <ConfigField label="Vote" help="Duree en secondes de la phase de vote.">
+        <ConfigField label="Vote" help="Durée en secondes de la phase de vote.">
           <NumericConfigInput value={config.durations.vote} min={10} max={600} step={5} onCommit={(value) => update({ durations: { ...config.durations, vote: value } })} />
         </ConfigField>
       </div>
@@ -1065,7 +1065,7 @@ function ConfigEditor({ config, onChange, compact = false }: { config: GameConfi
         <>
           <div className="toggles">
             <label><input type="checkbox" checked={config.deadCanHearAudio} onChange={(e) => update({ deadCanHearAudio: e.target.checked })} /> Morts entendent l'audio</label>
-            <label><input type="checkbox" checked={config.requireSpecialRoles} onChange={(e) => update({ requireSpecialRoles: e.target.checked })} /> Roles speciaux obligatoires</label>
+            <label><input type="checkbox" checked={config.requireSpecialRoles} onChange={(e) => update({ requireSpecialRoles: e.target.checked })} /> Rôles spéciaux obligatoires</label>
           </div>
           <div className="chips role-toggles">
             {ROLES.filter((role) => role !== "Croyant").map((role) => (
@@ -1158,7 +1158,7 @@ function AudioModeEditor({ code, audioMode }: { code: string; audioMode: "integr
       <h3><Mic size={16} /> Mode audio</h3>
       <div className="mode">
         <button className={audioMode === "external" ? "selected" : ""} onClick={() => socket.emit("updateAudioMode", { code, audioMode: "external" })}>Audio externe</button>
-        <button className={audioMode === "integrated" ? "selected" : ""} onClick={() => socket.emit("updateAudioMode", { code, audioMode: "integrated" })}>Audio integre</button>
+        <button className={audioMode === "integrated" ? "selected" : ""} onClick={() => socket.emit("updateAudioMode", { code, audioMode: "integrated" })}>Audio intégré</button>
       </div>
     </div>
   );
@@ -1182,7 +1182,7 @@ function MayorNomination({ view }: { view: RoomView }) {
   return (
     <div className="content">
       <h2>Nomination du Maire</h2>
-      <p>Proposez publiquement les candidats au poste de Maire. Le dernier choix remplace le precedent jusqu'a la fin du chrono.</p>
+      <p>Proposez publiquement les candidats au poste de Maire. Le dernier choix remplace le précédent jusqu'à la fin du chrono.</p>
       {canNominate ? (
         <>
           <SelectTarget value={targetId} onChange={(value) => {
@@ -1197,7 +1197,7 @@ function MayorNomination({ view }: { view: RoomView }) {
       ) : (
         <p className="muted">Vous observez les nominations sans participer.</p>
       )}
-      <PublicVoteBoard title="Nominations Maire publiques" emptyText="Aucune candidature proposee." details={view.mayorNominationDetails} totals={view.mayorNominationTotals} verb="propose" />
+      <PublicVoteBoard title="Nominations Maire publiques" emptyText="Aucune candidature proposée." details={view.mayorNominationDetails} totals={view.mayorNominationTotals} verb="propose" />
     </div>
   );
 }
@@ -1211,10 +1211,10 @@ function MayorElection({ view }: { view: RoomView }) {
   useEffect(() => setTargetId(ownVote?.targetId ?? ""), [ownVote?.targetId]);
   return (
     <div className="content">
-      <h2>Election du Maire</h2>
-      <p>Le Maire est une fonction publique, distincte des roles secrets. Le vote est limite aux candidats nomines.</p>
-      <PublicVoteBoard title="Candidats Maire verrouilles" emptyText="Aucun candidat verrouille." details={view.mayorNominationDetails} totals={view.mayorNominationTotals} verb="a propose" />
-      <p>{view.mayorVotes.length} vote(s) enregistres.</p>
+      <h2>Élection du Maire</h2>
+      <p>Le Maire est une fonction publique, distincte des rôles secrets. Le vote est limité aux candidats nominés.</p>
+      <PublicVoteBoard title="Candidats Maire verrouillés" emptyText="Aucun candidat verrouillé." details={view.mayorNominationDetails} totals={view.mayorNominationTotals} verb="a propose" />
+      <p>{view.mayorVotes.length} vote(s) enregistrés.</p>
       {canVote && <SelectTarget value={targetId} onChange={(value) => {
         setTargetId(value);
         if (value) socket.emit("electMayor", { code: view.code, targetId: value });
@@ -1223,8 +1223,8 @@ function MayorElection({ view }: { view: RoomView }) {
         <Crown size={18} /> {ownVote ? "Changer mon vote" : "Voter pour le Maire"}
       </button>
       {ownVote && <p className="muted">Votre vote actuel : <strong>{ownVote.targetName}</strong>.</p>}
-      {!canVote && <p className="muted">Vous observez l'election sans voter.</p>}
-      <PublicVoteBoard title="Votes du Maire" emptyText="Aucun vote enregistre." details={view.mayorVoteDetails} totals={view.mayorVoteTotals} verb="vote pour" />
+      {!canVote && <p className="muted">Vous observez l'élection sans voter.</p>}
+      <PublicVoteBoard title="Votes du Maire" emptyText="Aucun vote enregistré." details={view.mayorVoteDetails} totals={view.mayorVoteTotals} verb="vote pour" />
     </div>
   );
 }
@@ -1235,7 +1235,7 @@ function RoleCard({ view }: { view: RoomView }) {
   return (
     <div className="role-card">
       <div className="role-card-meta">
-        <span>Votre role secret</span>
+        <span>Votre rôle secret</span>
         {view.you?.isMayor && <span className="role-badge"><Crown size={14} /> Maire</span>}
       </div>
       <h2>{ROLE_LABELS[role]}</h2>
@@ -1244,7 +1244,7 @@ function RoleCard({ view }: { view: RoomView }) {
         {ROLE_ABILITIES[role].map((ability) => <li key={ability}>{ability}</li>)}
       </ul>
       {view.you?.powerStatuses.map((power) => (
-        <small className={power.used ? "used-power" : ""} key={power.key}>{power.label} : {power.used ? "Pouvoir deja utilise" : "Disponible"}</small>
+        <small className={power.used ? "used-power" : ""} key={power.key}>{power.label} : {power.used ? "Pouvoir déjà utilisé" : "Disponible"}</small>
       ))}
       {view.you?.secretInfo.map((info, index) => <small key={`${info}-${index}`}>{info}</small>)}
     </div>
@@ -1266,8 +1266,8 @@ function NightPanel({ view }: { view: RoomView }) {
     return (
       <div className="sleep-screen">
         <Moon size={42} />
-        <h2>Dormez...</h2>
-        <p>{view.you?.nightChannel === "sleep" ? "Votre role n'agit pas maintenant." : "Vous observez la partie sans interaction."}</p>
+        <h2>Dormez…</h2>
+        <p>{view.you?.nightChannel === "sleep" ? "Votre rôle n'agit pas maintenant." : "Vous observez la partie sans interaction."}</p>
       </div>
     );
   }
@@ -1311,17 +1311,17 @@ function NightPanel({ view }: { view: RoomView }) {
   if (isWatcher) {
     return (
       <ActionBlock title="Guetteuse">
-        <p>Vous observez discretement l'etape des Infiltres. Les informations utiles apparaissent dans votre carte de role.</p>
+        <p>Vous observez discrètement l'étape des Infiltrés. Les informations utiles apparaissent dans votre carte de rôle.</p>
       </ActionBlock>
     );
   }
 
   const targets = view.currentNightStep === "avocate" ? allAlive : aliveTargets;
   return (
-    <ActionBlock title={view.currentNightStep === "infiltres" ? "Communication des Infiltres" : "Action de nuit"}>
+    <ActionBlock title={view.currentNightStep === "infiltres" ? "Communication des Infiltrés" : "Action de nuit"}>
       <PowerNotice view={view} />
       <SelectTarget value={targetId} onChange={setTargetId} players={targets} />
-      {view.currentNightStep === "infiltres" && <p className="muted">Seuls les Infiltres voient cette interface et designent une victime commune.</p>}
+      {view.currentNightStep === "infiltres" && <p className="muted">Seuls les Infiltrés voient cette interface et désignent une victime commune.</p>}
       {view.currentNightStep === "infiltres" && <InfiltratorVoteBoard view={view} />}
       <div className="actions-row">
         <button className="primary" disabled={!targetId} onClick={() => socket.emit("nightAction", { code: view.code, targetId })}>Valider</button>
@@ -1335,11 +1335,11 @@ function InfiltratorVoteBoard({ view }: { view: RoomView }) {
   const votes = view.infiltratorVotes ?? [];
   return (
     <div className="vote-ledger private-ledger">
-      <h3>Choix des Infiltres</h3>
+      <h3>Choix des Infiltrés</h3>
       {votes.length ? (
         votes.map((vote) => <p key={vote.voterId}><strong>{vote.voterName}</strong> cible <strong>{vote.targetName}</strong></p>)
       ) : (
-        <p className="muted">Aucun choix enregistre.</p>
+        <p className="muted">Aucun choix enregistré.</p>
       )}
       {view.infiltratorVoteLeader && <p>Total actuel : <strong>{view.infiltratorVoteLeader.targetName}</strong> ({view.infiltratorVoteLeader.total})</p>}
     </div>
@@ -1349,7 +1349,7 @@ function InfiltratorVoteBoard({ view }: { view: RoomView }) {
 function PowerNotice({ view }: { view: RoomView }) {
   const used = view.you?.powerStatuses.filter((power) => power.used) ?? [];
   if (!used.length) return null;
-  return <p className="used-power">Pouvoir deja utilise : {used.map((power) => power.label).join(", ")}</p>;
+  return <p className="used-power">Pouvoir déjà utilisé : {used.map((power) => power.label).join(", ")}</p>;
 }
 
 function ChatPanel({ view }: { view: RoomView }) {
@@ -1373,11 +1373,11 @@ function ChatPanel({ view }: { view: RoomView }) {
             {message.text}
           </p>
         )) : <p className="muted">Aucun message visible.</p>}
-        {view.botThinking.map((name) => <p key={name} className="bot-thinking"><strong>{name}</strong> reflechit...</p>)}
+        {view.botThinking.map((name) => <p key={name} className="bot-thinking"><strong>{name}</strong> réfléchit…</p>)}
       </div>
       {canChat && (
         <form className="chat-form" onSubmit={submit}>
-          <input value={text} onChange={(event) => setText(event.target.value)} maxLength={280} placeholder="Ecrire un message" />
+          <input value={text} onChange={(event) => setText(event.target.value)} maxLength={280} placeholder="Écrire un message" />
           <button>Envoyer</button>
         </form>
       )}
@@ -1390,16 +1390,16 @@ function DebatePanel({ view, timer }: { view: RoomView; timer?: TimerInfo }) {
   const isOwnDefense = view.phase === "DEFENSE" && !!view.you && speaker?.id === view.you.id;
   return (
     <div className="content">
-      <h2>{view.phase === "DAY_ANNOUNCEMENT" ? "Le jour se leve" : view.phase === "DEFENSE" ? "Defense individuelle" : "Debat en cours"}</h2>
-      <p>{view.phase === "DEFENSE" && speaker ? <>Defense de <strong>{speaker.name}</strong> en cours...</> : <>Joueur qui parle : <strong>{speaker?.name ?? "discussion libre"}</strong></>}</p>
-      {view.phase === "DEFENSE" && speaker && <p className="muted">{speaker.name} peut terminer sa defense avant la fin du chrono.</p>}
+      <h2>{view.phase === "DAY_ANNOUNCEMENT" ? "Le jour se lève" : view.phase === "DEFENSE" ? "Défense individuelle" : "Débat en cours"}</h2>
+      <p>{view.phase === "DEFENSE" && speaker ? <>Défense de <strong>{speaker.name}</strong> en cours…</> : <>Joueur qui parle : <strong>{speaker?.name ?? "discussion libre"}</strong></>}</p>
+      {view.phase === "DEFENSE" && speaker && <p className="muted">{speaker.name} peut terminer sa défense avant la fin du chrono.</p>}
       {isOwnDefense && (
         <button className="primary" onClick={() => socket.emit("finishDefense", { code: view.code, participantId: speaker.id })}>
-          <Gavel size={18} /> Terminer ma defense
+          <Gavel size={18} /> Terminer ma défense
         </button>
       )}
-      {timer ? <PhaseTimer timer={timer} compact /> : <p>Temps restant : <strong>non chronometre</strong></p>}
-      {!view.you?.isMayor && <p className="muted">Le Maire controle la parole et le passage au vote.</p>}
+      {timer ? <PhaseTimer timer={timer} compact /> : <p>Temps restant : <strong>non chronométré</strong></p>}
+      {!view.you?.isMayor && <p className="muted">Le Maire contrôle la parole et le passage au vote.</p>}
     </div>
   );
 }
@@ -1412,7 +1412,7 @@ function NominationPanel({ view }: { view: RoomView }) {
   return (
     <div className="content">
       <h2>Nominations</h2>
-      <p>Chaque joueur vivant peut nominer un suspect. Le dernier choix remplace le precedent jusqu'a la fin du chrono.</p>
+      <p>Chaque joueur vivant peut nominer un suspect. Le dernier choix remplace le précédent jusqu'à la fin du chrono.</p>
       {canNominate ? (
         <>
           <SelectTarget value={targetId} onChange={(value) => {
@@ -1425,9 +1425,9 @@ function NominationPanel({ view }: { view: RoomView }) {
           {ownNomination && <p className="muted">Votre nomination actuelle : <strong>{ownNomination.targetName}</strong>.</p>}
         </>
       ) : (
-        <p className="muted">Vous etes emprisonne : vous observez les nominations sans participer.</p>
+        <p className="muted">Vous êtes emprisonné : vous observez les nominations sans participer.</p>
       )}
-      <PublicVoteBoard title="Nominations publiques" emptyText="Aucune nomination enregistree." details={view.nominationDetails} totals={view.nominationTotals} verb="nomine" />
+      <PublicVoteBoard title="Nominations publiques" emptyText="Aucune nomination enregistrée." details={view.nominationDetails} totals={view.nominationTotals} verb="nomine" />
     </div>
   );
 }
@@ -1438,19 +1438,19 @@ function DefenseRequestsPanel({ view }: { view: RoomView }) {
   const nomineePlayers = view.players.filter((player) => view.nominees.includes(player.id));
   return (
     <div className="content">
-      <h2>Demandes de defense</h2>
-      <p>Liste finale des nomines : <strong>{nomineePlayers.map((player) => player.name).join(", ")}</strong>.</p>
-      <PublicVoteBoard title="Nominations verrouillees" emptyText="Aucun nomine." details={view.nominationDetails} totals={view.nominationTotals} verb="a nomine" />
+      <h2>Demandes de défense</h2>
+      <p>Liste finale des nominés : <strong>{nomineePlayers.map((player) => player.name).join(", ")}</strong>.</p>
+      <PublicVoteBoard title="Nominations verrouillées" emptyText="Aucun nominé." details={view.nominationDetails} totals={view.nominationTotals} verb="a nomine" />
       {isNominee ? (
         <div className="defense-request-card">
-          <p>Vous etes nomine. Vous pouvez demander au Maire de vous accorder un temps de defense.</p>
+          <p>Vous êtes nominé. Vous pouvez demander au Maire de vous accorder un temps de défense.</p>
           <button className="primary" disabled={!!requested} onClick={() => socket.emit("requestDefense", { code: view.code })}>
-            <Gavel size={18} /> Demander a se defendre
+            <Gavel size={18} /> Demander à se défendre
           </button>
           {requested && <p className="muted">Demande {defenseRequestStatusLabel(requested.status)}.</p>}
         </div>
       ) : (
-        <p className="muted">{view.you?.alive ? "Seuls les joueurs nomines peuvent demander une defense." : "Vous etes emprisonne : vous observez les defenses sans participer."}</p>
+        <p className="muted">{view.you?.alive ? "Seuls les joueurs nominés peuvent demander une défense." : "Vous êtes emprisonné : vous observez les défenses sans participer."}</p>
       )}
       <DefenseRequestBoard requests={view.defenseRequests} />
     </div>
@@ -1467,8 +1467,8 @@ function VotePanel({ view }: { view: RoomView }) {
   return (
     <div className="content">
       <h2>Vote</h2>
-      <p>{view.votes.length} vote(s) enregistres. Le vote est limite aux joueurs nomines. Le Sage vaut 2 voix. Le Maire ajoute +1 voix.</p>
-      <PublicVoteBoard title="Nominations verrouillees" emptyText="Aucun nomine." details={view.nominationDetails} totals={view.nominationTotals} verb="a nomine" />
+      <p>{view.votes.length} vote(s) enregistrés. Le vote est limité aux joueurs nominés. Le Sage vaut 2 voix. Le Maire ajoute +1 voix.</p>
+      <PublicVoteBoard title="Nominations verrouillées" emptyText="Aucun nominé." details={view.nominationDetails} totals={view.nominationTotals} verb="a nomine" />
       {canVote ? (
         <>
           <SelectTarget value={targetId} onChange={setTargetId} players={targets} />
@@ -1476,9 +1476,9 @@ function VotePanel({ view }: { view: RoomView }) {
           {ownVote && <p className="muted">Votre vote actuel : <strong>{ownVote.targetName}</strong>.</p>}
         </>
       ) : (
-        <p className="muted">Vous etes emprisonne : vous observez le vote sans participer.</p>
+        <p className="muted">Vous êtes emprisonné : vous observez le vote sans participer.</p>
       )}
-      <PublicVoteBoard title="Votes publics" emptyText="Aucun vote enregistre." details={view.voteDetails} totals={view.voteTotals} verb="vote contre" weighted />
+      <PublicVoteBoard title="Votes publics" emptyText="Aucun vote enregistré." details={view.voteDetails} totals={view.voteTotals} verb="vote contre" weighted />
     </div>
   );
 }
@@ -1486,7 +1486,7 @@ function VotePanel({ view }: { view: RoomView }) {
 function DefenseRequestBoard({ requests }: { requests: RoomView["defenseRequests"] }) {
   return (
     <div className="vote-ledger">
-      <h3>Demandes recues</h3>
+      <h3>Demandes reçues</h3>
       {requests.length ? (
         requests.map((request) => (
           <p key={request.playerId}>
@@ -1494,7 +1494,7 @@ function DefenseRequestBoard({ requests }: { requests: RoomView["defenseRequests
           </p>
         ))
       ) : (
-        <p className="muted">Aucune demande de defense pour l'instant.</p>
+        <p className="muted">Aucune demande de défense pour l'instant.</p>
       )}
     </div>
   );
@@ -1503,9 +1503,9 @@ function DefenseRequestBoard({ requests }: { requests: RoomView["defenseRequests
 function defenseRequestStatusLabel(status: RoomView["defenseRequests"][number]["status"]) {
   const labels: Record<RoomView["defenseRequests"][number]["status"], string> = {
     pending: "en attente",
-    granted: "accordee",
+    granted: "accordée",
     refused: "passee",
-    done: "terminee"
+    done: "terminée"
   };
   return labels[status];
 }
@@ -1539,9 +1539,9 @@ function PublicVoteBoard({ title, emptyText, details, totals, verb, weighted = f
 function ResultPanel({ view }: { view: RoomView }) {
   return (
     <div className="content">
-      <h2>Resultat</h2>
+      <h2>Résultat</h2>
       <p>{view.lastResult}</p>
-      {view.you?.isHost && <p className="muted">L'hote peut debloquer le retour a la nuit avec son panneau admin.</p>}
+      {view.you?.isHost && <p className="muted">L'hôte peut débloquer le retour à la nuit avec son panneau admin.</p>}
     </div>
   );
 }
@@ -1550,7 +1550,7 @@ function EndPanel({ view, onLeaveRoom }: { view: RoomView; onLeaveRoom: () => vo
   return (
     <div className="content">
       <h2>Fin de partie</h2>
-      {view.winner ? <p>Victoire : <strong>{view.winner}</strong></p> : <p><strong>Partie terminee par l'hote.</strong></p>}
+      {view.winner ? <p>Victoire : <strong>{view.winner}</strong></p> : <p><strong>Partie terminée par l'hôte.</strong></p>}
       <p>{view.narrator}</p>
       <div className="actions-row">
         {view.you?.isHost && <button className="primary" onClick={() => socket.emit("returnToLobby", { code: view.code })}>Retour au lobby</button>}
@@ -1566,7 +1566,7 @@ function MayorPanel({ view, alivePlayers, timer }: { view: RoomView; alivePlayer
   const speaker = view.players.find((player) => player.id === view.activePlayerId);
   const pendingDefenseRequests = view.defenseRequests.filter((request) => request.status === "pending");
   const closeDebate = () => {
-    if (window.confirm("Cloturer le debat et passer aux nominations ?")) socket.emit("closeDebate", { code: view.code });
+    if (window.confirm("Clôturer le débat et passer aux nominations ?")) socket.emit("closeDebate", { code: view.code });
   };
   return (
     <section className="hostbar mayorbar">
@@ -1575,20 +1575,20 @@ function MayorPanel({ view, alivePlayers, timer }: { view: RoomView; alivePlayer
       {(view.phase === "DAY_ANNOUNCEMENT" || view.phase === "DEBATE") && (
         <>
           <select value={speechPlayer} onChange={(event) => setSpeechPlayer(event.target.value)}>{alivePlayers.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select>
-          <button onClick={() => socket.emit("startDebate", { code: view.code })}>Debat global</button>
+          <button onClick={() => socket.emit("startDebate", { code: view.code })}>Débat global</button>
           <button disabled={!speechPlayer} onClick={() => socket.emit("grantSpeech", { code: view.code, playerId: speechPlayer })}>Donner parole</button>
           <button onClick={() => socket.emit("stopSpeech", { code: view.code })}>Couper</button>
         </>
       )}
-      {view.phase === "DEFENSE" && <button onClick={() => socket.emit("stopSpeech", { code: view.code })}>Arreter la defense</button>}
+      {view.phase === "DEFENSE" && <button onClick={() => socket.emit("stopSpeech", { code: view.code })}>Arrêter la défense</button>}
       {["DAY_ANNOUNCEMENT", "DEBATE"].includes(view.phase) ? (
         <button onClick={closeDebate}>Passer aux nominations</button>
       ) : view.phase === "DEFENSE_REQUESTS" ? (
         <button onClick={() => socket.emit("startVote", { code: view.code })}>Passer au vote</button>
       ) : view.phase === "DEFENSE" ? (
-        <button disabled>Defense en cours</button>
+        <button disabled>Défense en cours</button>
       ) : (
-        <button disabled={view.phase !== "NOMINATION"} onClick={() => socket.emit("startVote", { code: view.code })}>Cloturer les nominations</button>
+        <button disabled={view.phase !== "NOMINATION"} onClick={() => socket.emit("startVote", { code: view.code })}>Clôturer les nominations</button>
       )}
       <span>{speaker ? `Parle : ${speaker.name}` : "Parole libre"}</span>
       {view.phase === "DEFENSE_REQUESTS" && (
@@ -1596,7 +1596,7 @@ function MayorPanel({ view, alivePlayers, timer }: { view: RoomView; alivePlayer
           {pendingDefenseRequests.length ? pendingDefenseRequests.map((request) => (
             <span key={request.playerId}>
               {request.playerName}
-              <button onClick={() => socket.emit("grantSpeech", { code: view.code, playerId: request.playerId })}>Accorder la defense</button>
+              <button onClick={() => socket.emit("grantSpeech", { code: view.code, playerId: request.playerId })}>Accorder la défense</button>
               <button onClick={() => socket.emit("denyDefense", { code: view.code, playerId: request.playerId })}>Passer</button>
             </span>
           )) : <span>Aucune demande en attente</span>}
@@ -1608,13 +1608,13 @@ function MayorPanel({ view, alivePlayers, timer }: { view: RoomView; alivePlayer
 
 function AdminPanel({ view }: { view: RoomView }) {
   const confirmEndGame = () => {
-    if (window.confirm("Mettre fin a la partie pour tous les joueurs ?")) socket.emit("endGame", { code: view.code });
+    if (window.confirm("Mettre fin à la partie pour tous les joueurs ?")) socket.emit("endGame", { code: view.code });
   };
   return (
     <section className="adminbar">
       <strong>Admin hote</strong>
-      {view.phase !== "GAME_OVER" && <button onClick={() => socket.emit("adminNext", { code: view.code })}>Debloquer la phase</button>}
-      {view.phase !== "LOBBY" && view.phase !== "GAME_OVER" && <button className="danger" onClick={confirmEndGame}>Mettre fin a la partie</button>}
+      {view.phase !== "GAME_OVER" && <button onClick={() => socket.emit("adminNext", { code: view.code })}>Débloquer la phase</button>}
+      {view.phase !== "LOBBY" && view.phase !== "GAME_OVER" && <button className="danger" onClick={confirmEndGame}>Mettre fin à la partie</button>}
       {view.phase === "GAME_OVER" && <button className="primary" onClick={() => socket.emit("returnToLobby", { code: view.code })}>Retour au lobby</button>}
       {view.gameLog && <details><summary>Journal</summary><GameLog entries={view.gameLog} /></details>}
     </section>
@@ -1644,7 +1644,7 @@ function AudioPanel({ view, audio, botVoice }: { view: RoomView; audio: ReturnTy
         </div>
         {botVoice.status === "error" && <small>Audio indisponible, reponse affichee en texte.</small>}
       </div>
-      <p>{view.audioMode === "external" ? "Audio externe selectionne. Utilisez WhatsApp, Discord ou un autre canal." : you.canHearAudio ? "Audio integre actif selon les permissions serveur." : "Audio coupe pour cette phase."}</p>
+      <p>{view.audioMode === "external" ? "Audio externe sélectionné. Utilisez WhatsApp, Discord ou un autre canal." : you.canHearAudio ? "Audio intégré actif selon les permissions serveur." : "Audio coupé pour cette phase."}</p>
       {view.audioMode === "integrated" && (
         <>
           <div className="actions-row audio-actions">
@@ -1664,7 +1664,7 @@ function AudioPanel({ view, audio, botVoice }: { view: RoomView; audio: ReturnTy
 
 function TransitionBanner({ transition }: { transition: NonNullable<RoomView["transition"]> }) {
   const isNight = transition === "night-falls";
-  return <section className="transition-banner">{isNight ? <Moon /> : <Sun />}<h2>{isNight ? "La nuit tombe..." : "Le jour se leve..."}</h2></section>;
+  return <section className="transition-banner">{isNight ? <Moon /> : <Sun />}<h2>{isNight ? "La nuit tombe…" : "Le jour se lève…"}</h2></section>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -1736,11 +1736,11 @@ function timerLabel(view: RoomView) {
   if (view.phase === "MAYOR_NOMINATION") return "Nominations Maire";
   if (view.phase === "MAYOR_ELECTION") return "Election du Maire";
   if (view.phase === "NIGHT") return view.activeRole ? `${ROLE_LABELS[view.activeRole]}` : "Action de nuit";
-  if (view.phase === "DEBATE") return "Debat";
+  if (view.phase === "DEBATE") return "Débat";
   if (view.phase === "NOMINATION") return "Nominations";
   if (view.phase === "DEFENSE") {
     const speaker = view.players.find((player) => player.id === view.activePlayerId);
-    return `Defense${speaker ? ` de ${speaker.name}` : ""}`;
+    return `Défense${speaker ? ` de ${speaker.name}` : ""}`;
   }
   if (view.phase === "VOTING") return "Vote";
   if (view.phase === "RESULT") return "Prochaine phase";
@@ -1760,12 +1760,12 @@ function canHearRemote(view: RoomView, fromPlayerId: string) {
 }
 
 function audioStatusText(audio: ReturnType<typeof useIntegratedAudio>, muted: boolean, canSpeak: boolean) {
-  if (audio.permission === "requesting") return "Demande de permission micro...";
-  if (audio.permission === "unsupported") return "Navigateur non compatible avec l'audio integre.";
-  if (audio.permission === "missing") return "Aucun micro detecte.";
-  if (audio.permission === "denied") return "Micro refuse par le navigateur.";
-  if (!audio.enabled) return "Le micro n'est pas connecte.";
-  if (muted || !canSpeak) return "Micro connecte, parole coupee par les regles.";
+  if (audio.permission === "requesting") return "Demande de permission micro…";
+  if (audio.permission === "unsupported") return "Navigateur non compatible avec l'audio intégré.";
+  if (audio.permission === "missing") return "Aucun micro détecté.";
+  if (audio.permission === "denied") return "Micro refusé par le navigateur.";
+  if (!audio.enabled) return "Le micro n'est pas connecté.";
+  if (muted || !canSpeak) return "Micro connecté, parole coupée par les règles.";
   return `Micro actif. Pairs audio : ${audio.activePeers}.`;
 }
 
@@ -1790,15 +1790,15 @@ function phaseLabel(phase: RoomView["phase"] | string) {
     LOBBY: "Lobby",
     ROLE_DISTRIBUTION: "Distribution",
     MAYOR_NOMINATION: "Nominations Maire",
-    MAYOR_ELECTION: "Election Maire",
+    MAYOR_ELECTION: "Élection Maire",
     NIGHT: "Nuit",
     DAY_ANNOUNCEMENT: "Annonce jour",
-    DEBATE: "Debat",
+    DEBATE: "Débat",
     NOMINATION: "Nominations",
-    DEFENSE_REQUESTS: "Demandes defense",
-    DEFENSE: "Defense",
+    DEFENSE_REQUESTS: "Demandes défense",
+    DEFENSE: "Défense",
     VOTING: "Vote",
-    RESULT: "Resultat",
+    RESULT: "Résultat",
     GAME_OVER: "Fin"
   };
   return labels[phase] ?? `Phase ${phase}`;
@@ -1808,7 +1808,7 @@ function adminStatusLabel(status: AdminRoomSummary["status"]) {
   const labels: Record<AdminRoomSummary["status"], string> = {
     lobby: "lobby",
     inGame: "partie en cours",
-    finished: "terminee"
+    finished: "terminée"
   };
   return labels[status];
 }

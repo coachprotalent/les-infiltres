@@ -79,6 +79,10 @@ type Room = {
   botThinkingIds: Set<string>;
   botBrains: Map<string, BotBrain>;
   botActionKeys: Set<string>;
+  botActionPhaseKey?: string;
+  botTimers: Set<NodeJS.Timeout>;
+  lastActivityAt: number;
+  emptySince?: number;
 };
 
 type BotBrain = {
@@ -226,6 +230,11 @@ export class GameStore {
   private onClose: (socketId: string, message: string) => void = () => undefined;
   private botAi = new BotRealtimeAIService();
 
+  constructor() {
+    const sweeper = setInterval(() => this.sweepRooms(), 60_000);
+    sweeper.unref?.();
+  }
+
   setBroadcaster(onChange: (room: Room) => void) {
     this.onChange = onChange;
   }
@@ -279,6 +288,8 @@ export class GameStore {
       botThinkingIds: new Set(),
       botBrains: new Map(),
       botActionKeys: new Set(),
+      botTimers: new Set(),
+      lastActivityAt: Date.now(),
       narrator: "Salle creee. En attente des joueurs.",
       powers: emptyPowers(),
       pastorAttemptedIds: new Set(),
@@ -322,10 +333,7 @@ export class GameStore {
   adminDeleteRoom(code: string) {
     const room = this.getRoom(code);
     if (!room) return false;
-    this.clearTimer(room);
-    const sockets = room.players.flatMap((player) => (player.socketId ? [player.socketId] : []));
-    this.rooms.delete(room.code);
-    for (const socketId of sockets) this.onClose(socketId, "Ce salon a été supprimé par l'administrateur.");
+    this.destroyRoom(room, "Ce salon a été supprimé par l'administrateur.");
     return true;
   }
 
@@ -335,7 +343,13 @@ export class GameStore {
     if (room.phase !== "LOBBY") return { ok: false as const, error: "La partie a deja commence." };
     if (room.players.length >= room.config.maxPlayers && room.botConfig.autoFill) {
       const bot = room.players.find((p) => p.isBot);
-      if (bot) room.players = room.players.filter((p) => p.id !== bot.id);
+      if (bot) {
+        room.players = room.players.filter((p) => p.id !== bot.id);
+        // On decremente aussi la cible de bots, sinon syncLobbyBots le recree aussitot et bloque le join.
+        room.botConfig.count = Math.max(0, room.botConfig.count - 1);
+        room.botBrains.delete(bot.id);
+        room.botThinkingIds.delete(bot.id);
+      }
     }
     if (room.players.length >= room.config.maxPlayers) return { ok: false as const, error: "La partie est complete." };
     const existing = room.players.find((p) => p.sessionId === sessionId);
@@ -495,26 +509,28 @@ export class GameStore {
     const room = this.requireHost(code, actorSocketId);
     if (!room) return;
     if (room.phase !== "LOBBY") return this.reject(actorSocketId, "Le salon ne peut etre ferme qu'avant le lancement de la partie.");
-    this.clearTimer(room);
-    const sockets = room.players.flatMap((player) => (player.socketId ? [player.socketId] : []));
-    this.rooms.delete(room.code);
-    for (const socketId of sockets) this.onClose(socketId, "Le salon a ete ferme par l'hote.");
+    this.destroyRoom(room, "Le salon a ete ferme par l'hote.");
   }
 
   private leaveLobby(room: Room, player: Player) {
     const leavingSocketId = player.socketId;
     room.players = room.players.filter((candidate) => candidate.id !== player.id);
-    if (!room.players.length) {
+    // Plus aucun humain : on ferme le salon (les bots seuls ne maintiennent pas une salle).
+    if (!room.players.some((candidate) => !candidate.isBot)) {
+      this.clearTimer(room);
+      this.clearBotTimers(room);
       this.rooms.delete(room.code);
       if (leavingSocketId) this.onClose(leavingSocketId, "Vous avez quitte le salon.");
       return;
     }
     if (player.id === room.hostId) {
-      room.hostId = room.players[0].id;
+      // L'hote ne peut etre transfere qu'a un joueur humain, jamais a un bot.
+      const nextHost = room.players.find((candidate) => !candidate.isBot) ?? room.players[0];
+      room.hostId = nextHost.id;
       player.isHost = false;
-      room.players[0].isHost = true;
-      room.narrator = `${player.name} a quitte le salon. ${room.players[0].name} devient hote.`;
-      this.log(room, "system", `${player.name} quitte le salon. Hote transfere a ${room.players[0].name}.`);
+      nextHost.isHost = true;
+      room.narrator = `${player.name} a quitte le salon. ${nextHost.name} devient hote.`;
+      this.log(room, "system", `${player.name} quitte le salon. Hote transfere a ${nextHost.name}.`);
     } else {
       room.narrator = `${player.name} a quitte le salon.`;
       this.log(room, "system", `${player.name} quitte le salon.`);
@@ -583,7 +599,7 @@ export class GameStore {
     if (room.mayorNominees.length && !room.mayorNominees.includes(target.id)) return this.reject(actorSocketId, "Le vote du Maire est limite aux candidats nomines.");
     room.mayorVotes = room.mayorVotes.filter((vote) => vote.voterId !== voter.id).concat({ voterId: voter.id, targetId });
     this.log(room, "vote", `${voter.name} vote pour ${target.name} comme Maire.`);
-    const eligible = room.players.filter((p) => p.alive && p.canVote).length;
+    const eligible = room.players.filter((p) => p.alive && p.canVote && (p.connected || p.isBot)).length;
     if (room.mayorVotes.length >= eligible) return this.resolveMayorElection(room);
     room.narrator = "Election du Maire en cours. Les derniers choix peuvent encore bouleverser la salle.";
     this.emit(room);
@@ -619,6 +635,8 @@ export class GameStore {
     if (!room) return;
     if (room.phase !== "GAME_OVER") return this.reject(actorSocketId, "La partie doit etre terminee avant de revenir au lobby.");
     this.clearTimer(room);
+    this.clearBotTimers(room);
+    room.botActionPhaseKey = undefined;
     room.phase = "LOBBY";
     room.players = room.players.filter((player) => !player.isBot);
     room.botBrains.clear();
@@ -894,7 +912,7 @@ export class GameStore {
     if (room.revoteTargets && !room.revoteTargets.includes(target.id)) return this.reject(actorSocketId, "Le second tour est limite aux joueurs a egalite.");
     room.votes = room.votes.filter((vote) => vote.voterId !== voter.id).concat({ voterId: voter.id, targetId });
     this.log(room, "vote", `${voter.name} vote contre ${target.name}.`);
-    const eligible = room.players.filter((p) => p.alive && p.canVote).length;
+    const eligible = room.players.filter((p) => p.alive && p.canVote && (p.connected || p.isBot)).length;
     if (room.votes.length >= eligible) return this.resolveVote(room);
     this.emit(room);
   }
@@ -914,6 +932,7 @@ export class GameStore {
   }
 
   sendChat(code: string, actorSocketId: string, text: string) {
+    if (typeof text !== "string") return;
     const room = this.getRoom(code);
     const actor = room?.players.find((p) => p.socketId === actorSocketId);
     if (!room || !actor) return this.reject(actorSocketId, "Partie introuvable.");
@@ -940,6 +959,7 @@ export class GameStore {
   }
 
   audioTranscript(code: string, actorSocketId: string, text: string) {
+    if (typeof text !== "string") return;
     const room = this.getRoom(code);
     const actor = room?.players.find((p) => p.socketId === actorSocketId);
     const clean = text.trim().replace(/\s+/g, " ").slice(0, 280);
@@ -1009,7 +1029,10 @@ export class GameStore {
     const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]);
     const topScore = ranked[0]?.[1] ?? 0;
     const tied = ranked.filter(([, score]) => score === topScore);
-    const mayorId = tied.length === 1 ? tied[0][0] : alive[Math.floor(Math.random() * alive.length)]?.id;
+    // En cas d'egalite, le tirage au sort respecte la regle allowMayor (pas de bot Maire si interdit).
+    const eligibleMayors = room.players.filter((p) => p.alive && (room.botConfig.allowMayor || !p.isBot));
+    const fallbackPool = eligibleMayors.length ? eligibleMayors : alive;
+    const mayorId = tied.length === 1 ? tied[0][0] : fallbackPool[Math.floor(Math.random() * fallbackPool.length)]?.id;
     room.mayorId = mayorId;
     const mayor = room.players.find((p) => p.id === mayorId);
     room.narrator = `${mayor?.name ?? "Un joueur"} est elu Maire. Le Maire gerera la parole pendant les debats.`;
@@ -1082,6 +1105,8 @@ export class GameStore {
     const nomineeNames = room.nominees.map((id) => room.players.find((p) => p.id === id)?.name).filter(Boolean).join(", ");
     room.narrator = `Nominations verrouillees : ${nomineeNames}. Les nomines peuvent demander une defense au Maire.`;
     this.log(room, "phase", `Demandes de defense ouvertes pour : ${nomineeNames}.`);
+    // Filet de securite : si le Maire (humain) est absent, on passe au vote a l'expiration du chrono.
+    this.startTimer(room, room.config.durations.nomination, () => this.startVoteFromDefenseRequests(room));
     this.emit(room);
   }
 
@@ -1114,6 +1139,8 @@ export class GameStore {
     if (shouldAutoVoteAfterDefenseRequests(room)) return this.startVoteFromDefenseRequests(room);
     room.phase = "DEFENSE_REQUESTS";
     if (!alreadyMarked) room.narrator = "Defense terminee. Le Maire peut traiter les autres demandes ou passer au vote.";
+    // On relance le filet de securite tant qu'on reste en phase de demandes de defense.
+    this.startTimer(room, room.config.durations.nomination, () => this.startVoteFromDefenseRequests(room));
     this.emit(room);
   }
 
@@ -1297,6 +1324,7 @@ export class GameStore {
 
   private finish(room: Room, winner: Winner | undefined, message: string) {
     this.clearTimer(room);
+    this.clearBotTimers(room);
     room.phase = "GAME_OVER";
     room.winner = winner;
     room.narrator = message;
@@ -1360,7 +1388,9 @@ export class GameStore {
     room.timerDuration = duration;
     room.timerEndsAt = startedAt + duration * 1000;
     room.timer = setTimeout(done, duration * 1000);
-    room.timerPulse = setInterval(() => this.emit(room), 1000);
+    // Le pulse ne sert qu'a rafraichir le decompte cote client : il ne doit ni
+    // replanifier les tours de bots ni marquer de l'activite (sinon fuite/sur-declenchement).
+    room.timerPulse = setInterval(() => this.onChange(room), 1000);
   }
 
   private clearTimer(room: Room) {
@@ -1371,6 +1401,41 @@ export class GameStore {
     room.timerStartedAt = undefined;
     room.timerDuration = undefined;
     room.timerEndsAt = undefined;
+  }
+
+  private scheduleBotTimeout(room: Room, fn: () => void, delay: number) {
+    const handle = setTimeout(() => {
+      room.botTimers.delete(handle);
+      fn();
+    }, delay);
+    room.botTimers.add(handle);
+  }
+
+  private clearBotTimers(room: Room) {
+    for (const handle of room.botTimers) clearTimeout(handle);
+    room.botTimers.clear();
+  }
+
+  private destroyRoom(room: Room, message: string) {
+    this.clearTimer(room);
+    this.clearBotTimers(room);
+    const sockets = room.players.flatMap((player) => (player.socketId ? [player.socketId] : []));
+    this.rooms.delete(room.code);
+    for (const socketId of sockets) this.onClose(socketId, message);
+  }
+
+  private sweepRooms() {
+    const now = Date.now();
+    for (const room of [...this.rooms.values()]) {
+      const hasConnectedHuman = room.players.some((player) => !player.isBot && player.connected);
+      if (hasConnectedHuman) room.emptySince = undefined;
+      else room.emptySince ??= now;
+      const finishedIdle = room.phase === "GAME_OVER" && now - room.lastActivityAt > 30 * 60_000;
+      const abandoned = !hasConnectedHuman && room.emptySince !== undefined && now - room.emptySince > 10 * 60_000;
+      if (finishedIdle || abandoned) {
+        this.destroyRoom(room, "Salon ferme automatiquement apres une periode d'inactivite.");
+      }
+    }
   }
 
   private assignRoles(room: Room) {
@@ -1400,7 +1465,10 @@ export class GameStore {
   }
 
   private pickNextMayor(room: Room) {
-    return room.players.find((p) => p.alive && (room.botConfig.allowMayor || !p.isBot))?.id ?? room.players.find((p) => p.alive)?.id;
+    const eligible = room.players.find((p) => p.alive && (room.botConfig.allowMayor || !p.isBot));
+    if (eligible) return eligible.id;
+    // Aucun joueur eligible : pas de Maire bot impose si la regle l'interdit.
+    return room.botConfig.allowMayor ? room.players.find((p) => p.alive)?.id : undefined;
   }
 
   private nextBotName(room: Room) {
@@ -1493,6 +1561,12 @@ export class GameStore {
 
   private scheduleBotTurns(room: Room) {
     if (!this.botAi.enabled || !room.botConfig.enabled || room.phase === "LOBBY" || room.phase === "GAME_OVER") return;
+    // Purge des cles d'action de bots a chaque changement de round/phase pour borner la memoire.
+    const phaseKey = `${room.round}:${room.phase}`;
+    if (room.botActionPhaseKey !== phaseKey) {
+      room.botActionKeys.clear();
+      room.botActionPhaseKey = phaseKey;
+    }
     const candidates = room.players.filter((p) => p.isBot && p.alive);
     for (const bot of candidates) {
       const key = this.botActionKey(room, bot);
@@ -1500,7 +1574,7 @@ export class GameStore {
       room.botActionKeys.add(key);
       const baseDelay = Math.max(250, room.botConfig.averageResponseMs);
       const delay = Math.max(250, Math.floor(baseDelay * 0.6 + Math.random() * baseDelay * 0.8));
-      setTimeout(() => void this.runBotTurn(room.code, bot.id, key), delay);
+      this.scheduleBotTimeout(room, () => void this.runBotTurn(room.code, bot.id, key), delay);
     }
     this.scheduleQuietBotIntervention(room);
   }
@@ -1653,7 +1727,7 @@ export class GameStore {
     bot.audioActive = true;
     this.emit(room);
     const duration = Math.min(9000, Math.max(1800, text.length * 45));
-    setTimeout(() => {
+    this.scheduleBotTimeout(room, () => {
       const nextRoom = this.getRoom(room.code);
       const nextBot = nextRoom?.players.find((player) => player.id === bot.id && player.isBot);
       if (!nextRoom || !nextBot) return;
@@ -1838,7 +1912,7 @@ export class GameStore {
     room.mayorVotes = room.mayorVotes.filter((vote) => vote.voterId !== bot.id).concat({ voterId: bot.id, targetId });
     if (reason) this.addChatMessage(room, bot, reason, "public");
     this.log(room, "vote", `${bot.name} vote pour ${target.name} comme Maire.`);
-    const eligible = room.players.filter((p) => p.alive && p.canVote).length;
+    const eligible = room.players.filter((p) => p.alive && p.canVote && (p.connected || p.isBot)).length;
     if (room.mayorVotes.length >= eligible) return this.resolveMayorElection(room);
     this.emit(room);
   }
@@ -1868,7 +1942,7 @@ export class GameStore {
     room.votes = room.votes.filter((vote) => vote.voterId !== bot.id).concat({ voterId: bot.id, targetId });
     if (reason) this.addChatMessage(room, bot, reason, "public");
     this.log(room, "vote", `${bot.name} vote contre ${target.name}.`);
-    const eligible = room.players.filter((p) => p.alive && p.canVote).length;
+    const eligible = room.players.filter((p) => p.alive && p.canVote && (p.connected || p.isBot)).length;
     if (room.votes.length >= eligible) return this.resolveVote(room);
     this.emit(room);
   }
@@ -1985,7 +2059,7 @@ export class GameStore {
       room.botThinkingIds.add(bot.id);
       console.log(`[BotAI] ${bot.name} generating reply`);
       this.emit(room);
-      setTimeout(() => void this.runBotMentionReply(room.code, bot.id, message.id, key), 350 + Math.floor(Math.random() * 650));
+      this.scheduleBotTimeout(room, () => void this.runBotMentionReply(room.code, bot.id, message.id, key), 350 + Math.floor(Math.random() * 650));
     }
   }
 
@@ -2012,7 +2086,7 @@ export class GameStore {
     room.botActionKeys.add(key);
     room.botThinkingIds.add(bot.id);
     this.onChange(room);
-    setTimeout(() => void this.runBotMentionReply(room.code, bot.id, room.chatMessages.at(-1)?.id ?? "", key), 500 + Math.floor(Math.random() * 900));
+    this.scheduleBotTimeout(room, () => void this.runBotMentionReply(room.code, bot.id, room.chatMessages.at(-1)?.id ?? "", key), 500 + Math.floor(Math.random() * 900));
   }
 
   private async runBotMentionReply(code: string, botId: string, messageId: string, key: string) {
@@ -2088,6 +2162,8 @@ export class GameStore {
   }
 
   private getRoom(code: string) {
+    // Garde defensive : un client peut envoyer n'importe quoi a la place d'une string.
+    if (typeof code !== "string") return undefined;
     return this.rooms.get(code.trim().toUpperCase());
   }
 
@@ -2122,6 +2198,7 @@ export class GameStore {
   }
 
   private emit(room: Room) {
+    room.lastActivityAt = Date.now();
     this.onChange(room);
     this.scheduleBotTurns(room);
   }

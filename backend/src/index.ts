@@ -68,7 +68,18 @@ io.on("connection", (socket) => {
     return true;
   };
 
-  socket.on("adminLogin", ({ username, password }, ack) => {
+  // Enveloppe chaque handler : une exception (payload malforme, etc.) ne doit jamais crasher le process.
+  const on = <E extends keyof ClientToServerEvents>(event: E, handler: (...args: any[]) => void) => {
+    socket["on"](event as any, ((...args: any[]) => {
+      try {
+        handler(...args);
+      } catch (error) {
+        console.error(`[socket] erreur handler ${String(event)} :`, error instanceof Error ? error.message : error);
+      }
+    }) as any);
+  };
+
+  on("adminLogin", ({ username, password }, ack) => {
     if (!ADMIN_USERNAME || !ADMIN_PASSWORD) return ack({ ok: false, error: "Identifiants admin non configures." });
     if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) return ack({ ok: false, error: "Identifiants admin invalides." });
     const token = crypto.randomBytes(32).toString("hex");
@@ -76,76 +87,76 @@ io.on("connection", (socket) => {
     ack({ ok: true, token });
   });
 
-  socket.on("adminLogout", ({ token }) => {
+  on("adminLogout", ({ token }) => {
     adminTokens.delete(token);
   });
 
-  socket.on("adminListRooms", ({ token }, ack) => {
+  on("adminListRooms", ({ token }, ack) => {
     if (!validateAdmin(token)) return ack({ ok: false, error: "Session admin invalide ou expiree." });
     ack({ ok: true, rooms: store.adminRooms() });
   });
 
-  socket.on("adminRoomDetails", ({ token, code }, ack) => {
+  on("adminRoomDetails", ({ token, code }, ack) => {
     if (!validateAdmin(token)) return ack({ ok: false, error: "Session admin invalide ou expiree." });
     const room = store.adminRoomDetails(code);
     if (!room) return ack({ ok: false, error: "Salon introuvable." });
     ack({ ok: true, room });
   });
 
-  socket.on("adminDeleteRoom", ({ token, code }, ack) => {
+  on("adminDeleteRoom", ({ token, code }, ack) => {
     if (!validateAdmin(token)) return ack({ ok: false, error: "Session admin invalide ou expiree." });
     if (!store.adminDeleteRoom(code)) return ack({ ok: false, error: "Salon introuvable." });
     ack({ ok: true });
   });
 
-  socket.on("getServerSettings", (ack) => {
+  on("getServerSettings", (ack) => {
     ack(store.botSettings());
   });
 
-  socket.on("createRoom", (payload, ack) => {
+  on("createRoom", (payload, ack) => {
     ack(store.createRoom(payload.name, payload.audioMode, socket.id, payload.sessionId, payload.config, payload.botConfig));
   });
 
-  socket.on("joinRoom", (payload, ack) => {
+  on("joinRoom", (payload, ack) => {
     ack(store.joinRoom(payload.code, payload.name, socket.id, payload.sessionId));
   });
 
-  socket.on("reconnectRoom", (payload, ack) => {
+  on("reconnectRoom", (payload, ack) => {
     ack(store.reconnect(payload.code, payload.sessionId, socket.id));
   });
 
-  socket.on("updateConfig", ({ code, config }) => store.updateConfig(code, socket.id, config));
-  socket.on("updateBotConfig", ({ code, botConfig }) => store.updateBotConfig(code, socket.id, botConfig));
-  socket.on("updateAudioMode", ({ code, audioMode }) => store.updateAudioMode(code, socket.id, audioMode));
-  socket.on("closeRoom", ({ code }) => store.closeRoom(code, socket.id));
-  socket.on("leaveRoom", ({ code }) => store.leaveRoom(code, socket.id));
-  socket.on("startGame", ({ code }) => store.startGame(code, socket.id));
-  socket.on("addBot", ({ code }) => store.addBot(code, socket.id));
-  socket.on("addBots", ({ code, count }) => store.addBots(code, socket.id, count));
-  socket.on("fillWithBots", ({ code, targetCount }) => store.fillWithBots(code, socket.id, targetCount));
-  socket.on("removeParticipant", ({ code, playerId }) => store.removeParticipant(code, socket.id, playerId));
-  socket.on("nominateMayor", ({ code, targetId }) => store.nominateMayor(code, socket.id, targetId));
-  socket.on("electMayor", ({ code, targetId }) => store.electMayor(code, socket.id, targetId));
-  socket.on("adminNext", ({ code }) => store.adminNext(code, socket.id));
-  socket.on("endGame", ({ code }) => store.endGame(code, socket.id));
-  socket.on("returnToLobby", ({ code }) => store.returnToLobby(code, socket.id));
-  socket.on("nightAction", ({ code, ...action }) => store.nightAction(code, socket.id, action));
-  socket.on("finishNightStep", ({ code }) => store.finishNightStep(code, socket.id));
-  socket.on("startDebate", ({ code, seconds }) => store.startDebate(code, socket.id, seconds));
-  socket.on("grantSpeech", ({ code, playerId, seconds }) => store.grantSpeech(code, socket.id, playerId, seconds));
-  socket.on("stopSpeech", ({ code }) => store.stopSpeech(code, socket.id));
-  socket.on("finishDefense", ({ code, participantId }) => store.finishDefense(code, participantId, socket.id));
-  socket.on("closeDebate", ({ code }) => store.closeDebate(code, socket.id));
-  socket.on("nominate", ({ code, targetId }) => store.nominate(code, socket.id, targetId));
-  socket.on("requestDefense", ({ code }) => store.requestDefense(code, socket.id));
-  socket.on("denyDefense", ({ code, playerId }) => store.denyDefense(code, socket.id, playerId));
-  socket.on("startVote", ({ code, seconds }) => store.startVote(code, socket.id, seconds));
-  socket.on("vote", ({ code, targetId }) => store.vote(code, socket.id, targetId));
-  socket.on("sendChat", ({ code, text }) => store.sendChat(code, socket.id, text));
-  socket.on("setMuted", ({ code, playerId, muted }) => store.setMuted(code, socket.id, playerId, muted));
-  socket.on("audioActivity", ({ code, speaking }) => store.audioActivity(code, socket.id, speaking));
-  socket.on("audioTranscript", ({ code, text }) => store.audioTranscript(code, socket.id, text));
-  socket.on("rtcSignal", ({ code, to, signal }) => {
+  on("updateConfig", ({ code, config }) => store.updateConfig(code, socket.id, config));
+  on("updateBotConfig", ({ code, botConfig }) => store.updateBotConfig(code, socket.id, botConfig));
+  on("updateAudioMode", ({ code, audioMode }) => store.updateAudioMode(code, socket.id, audioMode));
+  on("closeRoom", ({ code }) => store.closeRoom(code, socket.id));
+  on("leaveRoom", ({ code }) => store.leaveRoom(code, socket.id));
+  on("startGame", ({ code }) => store.startGame(code, socket.id));
+  on("addBot", ({ code }) => store.addBot(code, socket.id));
+  on("addBots", ({ code, count }) => store.addBots(code, socket.id, count));
+  on("fillWithBots", ({ code, targetCount }) => store.fillWithBots(code, socket.id, targetCount));
+  on("removeParticipant", ({ code, playerId }) => store.removeParticipant(code, socket.id, playerId));
+  on("nominateMayor", ({ code, targetId }) => store.nominateMayor(code, socket.id, targetId));
+  on("electMayor", ({ code, targetId }) => store.electMayor(code, socket.id, targetId));
+  on("adminNext", ({ code }) => store.adminNext(code, socket.id));
+  on("endGame", ({ code }) => store.endGame(code, socket.id));
+  on("returnToLobby", ({ code }) => store.returnToLobby(code, socket.id));
+  on("nightAction", ({ code, ...action }) => store.nightAction(code, socket.id, action));
+  on("finishNightStep", ({ code }) => store.finishNightStep(code, socket.id));
+  on("startDebate", ({ code, seconds }) => store.startDebate(code, socket.id, seconds));
+  on("grantSpeech", ({ code, playerId, seconds }) => store.grantSpeech(code, socket.id, playerId, seconds));
+  on("stopSpeech", ({ code }) => store.stopSpeech(code, socket.id));
+  on("finishDefense", ({ code, participantId }) => store.finishDefense(code, participantId, socket.id));
+  on("closeDebate", ({ code }) => store.closeDebate(code, socket.id));
+  on("nominate", ({ code, targetId }) => store.nominate(code, socket.id, targetId));
+  on("requestDefense", ({ code }) => store.requestDefense(code, socket.id));
+  on("denyDefense", ({ code, playerId }) => store.denyDefense(code, socket.id, playerId));
+  on("startVote", ({ code, seconds }) => store.startVote(code, socket.id, seconds));
+  on("vote", ({ code, targetId }) => store.vote(code, socket.id, targetId));
+  on("sendChat", ({ code, text }) => store.sendChat(code, socket.id, text));
+  on("setMuted", ({ code, playerId, muted }) => store.setMuted(code, socket.id, playerId, muted));
+  on("audioActivity", ({ code, speaking }) => store.audioActivity(code, socket.id, speaking));
+  on("audioTranscript", ({ code, text }) => store.audioTranscript(code, socket.id, text));
+  on("rtcSignal", ({ code, to, signal }) => {
     const fromView = store.viewBySocket(code, socket.id);
     if (!fromView?.you) return;
     if (fromView.audioMode !== "integrated") return socket.emit("toast", "L'audio integre n'est pas actif dans cette partie.");
