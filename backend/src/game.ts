@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { AdminRoomDetails, AdminRoomSummary, AudioMode, BotRoomConfig, BotVoiceConfig, ChatMessage, DefenseRequest, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, ServerSettings, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
-import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, mergeBotConfig, mergeConfig } from "@les-infiltres/shared";
+import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, getRoleComposition, mergeBotConfig, mergeConfig } from "@les-infiltres/shared";
 import { BotAIService, type BotAIContext, type BotAllowedAction, type BotDecision } from "./botAI.js";
 import { NarrationService } from "./narration.js";
 import { personaDebateLines, personaMayorReason, personaReplyLines, personaVoteReason } from "./botPersonas.js";
@@ -2050,7 +2050,9 @@ export class GameStore {
         console.log(`[BotAI] ${bot.name} skipped: not allowed to speak in this phase`);
         continue;
       }
-      if (!this.canBotAutoSpeak(room, bot)) {
+      // Un tag direct (ex. "Elias, ...") prime sur le cooldown : le bot interpelle reagit.
+      const directlyMentioned = mentionsBot(message.text, bot.name);
+      if (!directlyMentioned && !this.canBotAutoSpeak(room, bot)) {
         console.log(`[BotAI] ${bot.name} skipped: auto-speak cooldown`);
         continue;
       }
@@ -2058,9 +2060,9 @@ export class GameStore {
       if (room.botActionKeys.has(key)) continue;
       room.botActionKeys.add(key);
       room.botThinkingIds.add(bot.id);
-      console.log(`[BotAI] ${bot.name} generating reply`);
+      console.log(`[BotAI] ${bot.name} generating reply (direct=${directlyMentioned})`);
       this.emit(room);
-      this.scheduleBotTimeout(room, () => void this.runBotMentionReply(room.code, bot.id, message.id, key), 350 + Math.floor(Math.random() * 650));
+      this.scheduleBotTimeout(room, () => void this.runBotMentionReply(room.code, bot.id, message.id, key, directlyMentioned), 350 + Math.floor(Math.random() * 650));
     }
   }
 
@@ -2090,7 +2092,7 @@ export class GameStore {
     this.scheduleBotTimeout(room, () => void this.runBotMentionReply(room.code, bot.id, room.chatMessages.at(-1)?.id ?? "", key), 500 + Math.floor(Math.random() * 900));
   }
 
-  private async runBotMentionReply(code: string, botId: string, messageId: string, key: string) {
+  private async runBotMentionReply(code: string, botId: string, messageId: string, key: string, forced = false) {
     const room = this.getRoom(code);
     const bot = room?.players.find((player) => player.id === botId && player.isBot);
     if (!room || !bot || !room.botActionKeys.has(key)) return;
@@ -2099,7 +2101,8 @@ export class GameStore {
         console.log(`[BotAI] ${bot.name} skipped: not allowed to speak in this phase`);
         return;
       }
-      if (!this.canBotAutoSpeak(room, bot)) {
+      // Tag direct : on ignore le cooldown pour garantir l'interaction.
+      if (!forced && !this.canBotAutoSpeak(room, bot)) {
         console.log(`[BotAI] ${bot.name} skipped: auto-speak cooldown`);
         return;
       }
@@ -2524,8 +2527,9 @@ function lobbyInfo(players: Player[], config: GameConfig) {
     humanCount: playerCount - botCount,
     botCount,
     missingPlayers: Math.max(0, MIN_PLAYERS - playerCount),
-    plannedInfiltrators: getInfiltratorCount(playerCount),
-    potentialRoles: getPotentialRoles(playerCount, config)
+    plannedInfiltrators: getInfiltratorCount(Math.max(playerCount, MIN_PLAYERS)),
+    potentialRoles: getPotentialRoles(playerCount, config),
+    roleComposition: getRoleComposition(playerCount, config)
   };
 }
 

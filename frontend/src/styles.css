@@ -794,6 +794,16 @@ button:disabled {
   font-size: 13px;
 }
 
+.role-composition strong {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.3);
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+}
+
 h3 {
   font-size: 18px;
   margin: 0;

@@ -958,8 +958,13 @@ function Lobby({ view }: { view: RoomView }) {
         </div>
       </div>
       <div>
-        <h3>Rôles potentiels</h3>
-        <div className="chips">{view.lobby.potentialRoles.map((role) => <span key={role}>{ROLE_LABELS[role]}</span>)}</div>
+        <h3>Rôles de la partie</h3>
+        <p className="muted">Composition pour {Math.max(view.lobby.playerCount, view.lobby.minPlayers)} joueurs{view.lobby.playerCount < view.lobby.minPlayers ? " (projection au minimum requis)" : ""}. L'attribution des rôles reste secrète.</p>
+        <div className="chips role-composition">
+          {view.lobby.roleComposition.map(({ role, count }) => (
+            <span key={role}>{ROLE_LABELS[role]} <strong>×{count}</strong></span>
+          ))}
+        </div>
       </div>
       {view.you?.isHost && (
         <div className="actions-row">

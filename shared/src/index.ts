@@ -158,6 +158,7 @@ export type LobbyInfo = {
   missingPlayers: number;
   plannedInfiltrators: number;
   potentialRoles: Role[];
+  roleComposition: Array<{ role: Role; count: number }>;
 };
 
 export type GameLogEntry = {
@@ -504,6 +505,18 @@ export function generateRoleDistribution(playerCount: number, config: GameConfig
 
 export function getPotentialRoles(playerCount: number, config: GameConfig = DEFAULT_CONFIG): Role[] {
   return Array.from(new Set(generateRoleDistribution(Math.max(playerCount, MIN_PLAYERS), config)));
+}
+
+// Composition exacte (et deterministe) de la partie : combien de chaque role.
+// Seule l'attribution qui-a-quoi est aleatoire ; les quantites, elles, sont fixes.
+export function getRoleComposition(playerCount: number, config: GameConfig = DEFAULT_CONFIG): Array<{ role: Role; count: number }> {
+  const distribution = generateRoleDistribution(Math.max(playerCount, MIN_PLAYERS), config);
+  const counts = new Map<Role, number>();
+  for (const role of distribution) counts.set(role, (counts.get(role) ?? 0) + 1);
+  const rank = (role: Role) => (role === "Infiltre" ? -1 : role === "Croyant" ? ROLES.length + 1 : ROLES.indexOf(role));
+  return [...counts.entries()]
+    .map(([role, count]) => ({ role, count }))
+    .sort((a, b) => rank(a.role) - rank(b.role));
 }
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number) {
