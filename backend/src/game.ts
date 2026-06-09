@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { AdminRoomDetails, AdminRoomSummary, AudioMode, BotRoomConfig, BotVoiceConfig, ChatMessage, DefenseRequest, GameConfig, GameLogEntry, GamePhase, NightStep, PlayerPublic, PowerStatus, Role, RoomView, ServerSettings, VoteRecord, VoteTotal, VoteViewRecord, Winner } from "@les-infiltres/shared";
 import { DEFAULT_CONFIG, MAX_PLAYERS, MIN_PLAYERS, ROLE_LABELS, ROLES, generateRoleDistribution, getInfiltratorCount, getPotentialRoles, mergeBotConfig, mergeConfig } from "@les-infiltres/shared";
-import { BotRealtimeAIService, type BotAIContext, type BotAllowedAction, type BotDecision } from "./botRealtimeAI.js";
+import { BotAIService, type BotAIContext, type BotAllowedAction, type BotDecision } from "./botAI.js";
 import { NarrationService } from "./narration.js";
 import { personaDebateLines, personaMayorReason, personaReplyLines, personaVoteReason } from "./botPersonas.js";
 import { NarratorTtsService } from "./narratorTts.js";
@@ -230,7 +230,7 @@ export class GameStore {
   private onChange: (room: Room) => void = () => undefined;
   private onToast: (socketId: string, message: string) => void = () => undefined;
   private onClose: (socketId: string, message: string) => void = () => undefined;
-  private botAi = new BotRealtimeAIService();
+  private botAi = new BotAIService();
   private narratorTts = new NarratorTtsService();
 
   constructor() {

@@ -1,6 +1,5 @@
 import type { BotRoomConfig, ChatMessage, GamePhase, NightStep, Role, VoteTotal, VoteViewRecord } from "@les-infiltres/shared";
 import { DEFAULT_BOT_CONFIG, ROLE_LABELS, mergeBotConfig } from "@les-infiltres/shared";
-import WebSocket from "ws";
 
 export type BotAllowedAction = "speak" | "nominateMayor" | "voteMayor" | "nominate" | "requestDefense" | "vote" | "nightAction" | "pass";
 
@@ -46,40 +45,16 @@ export type BotAIContext = {
   allowedActions: BotAllowedAction[];
 };
 
-type RealtimeMessage = {
-  type?: string;
-  response?: {
-    status?: string;
-    status_details?: {
-      error?: {
-        message?: string;
-      };
-    };
-    output?: Array<{
-      content?: Array<{
-        text?: string;
-        transcript?: string;
-      }>;
-    }>;
-  };
-  delta?: string;
-  text?: string;
-  error?: {
-    message?: string;
-  };
-  item?: {
-    content?: Array<{
-      text?: string;
-      transcript?: string;
-    }>;
-  };
-};
-
-export class BotRealtimeAIService {
+/**
+ * Service IA des bots — un seul cerveau : Azure OpenAI chat completions.
+ * Il decide ce qu'un bot dit ou fait (objet JSON d'action), avec un contexte
+ * filtre anti-triche fourni par game.ts. Si l'IA est desactivee, non configuree,
+ * ou en erreur/timeout, decide() renvoie undefined et game.ts retombe sur les
+ * personnalites hors-ligne (botPersonas).
+ */
+export class BotAIService {
   readonly enabled: boolean;
   readonly configured: boolean;
-  readonly reasoningEnabled: boolean;
-  readonly reasoningConfigured: boolean;
   readonly autoSpeakEnabled: boolean;
   readonly voiceVariationEnabled: boolean;
   readonly defaultVoice: string;
@@ -89,45 +64,28 @@ export class BotRealtimeAIService {
   readonly maxPerRoom: number;
   readonly audioEnabled: boolean;
   readonly defaults: BotRoomConfig;
-  private readonly realtimeEndpoint: string;
-  private readonly realtimeApiKey: string;
-  private readonly realtimeApiVersion: string;
-  private readonly realtimeDeployment: string;
-  private readonly reasoningEndpoint: string;
-  private readonly reasoningApiKey: string;
-  private readonly reasoningApiVersion: string;
-  private readonly reasoningDeployment: string;
-  private readonly transcriptionEndpoint: string;
-  private readonly transcriptionApiKey: string;
-  private readonly transcriptionApiVersion: string;
-  private readonly transcriptionDeployment: string;
-  private readonly maxReasoningTokens: number;
+  private readonly endpoint: string;
+  private readonly apiKey: string;
+  private readonly apiVersion: string;
+  private readonly deployment: string;
+  private readonly maxOutputTokens: number;
   private readonly responseStyle: string;
   private readonly personalityVariation: boolean;
   private readonly participation: string;
   private readonly timeoutMs: number;
 
   constructor(env: NodeJS.ProcessEnv = process.env) {
-    this.realtimeEndpoint = (env.AZURE_OPENAI_REALTIME_ENDPOINT ?? env.AZURE_OPENAI_ENDPOINT ?? "").replace(/\/+$/, "");
-    this.realtimeApiKey = env.AZURE_OPENAI_REALTIME_API_KEY ?? env.AZURE_OPENAI_API_KEY ?? "";
-    this.realtimeApiVersion = env.AZURE_OPENAI_REALTIME_API_VERSION ?? env.AZURE_OPENAI_API_VERSION ?? "2024-10-01-preview";
-    this.realtimeDeployment = env.AZURE_OPENAI_REALTIME_DEPLOYMENT || "gpt-realtime-1.5";
-    this.reasoningEndpoint = (env.AZURE_OPENAI_REASONING_ENDPOINT ?? "").replace(/\/+$/, "");
-    this.reasoningApiKey = env.AZURE_OPENAI_REASONING_API_KEY ?? "";
-    this.reasoningApiVersion = env.AZURE_OPENAI_REASONING_API_VERSION || "2025-01-01-preview";
-    this.reasoningDeployment = env.AZURE_OPENAI_REASONING_DEPLOYMENT || "gpt5.4";
-    this.transcriptionEndpoint = (env.AZURE_OPENAI_TRANSCRIPTION_ENDPOINT ?? "").replace(/\/+$/, "");
-    this.transcriptionApiKey = env.AZURE_OPENAI_TRANSCRIPTION_API_KEY ?? "";
-    this.transcriptionApiVersion = env.AZURE_OPENAI_TRANSCRIPTION_API_VERSION || "2025-01-01-preview";
-    this.transcriptionDeployment = env.AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT || "";
+    // Connexion Azure OpenAI (noms clairs + compatibilite avec les anciens noms "reasoning").
+    this.endpoint = (env.AZURE_OPENAI_ENDPOINT ?? env.AZURE_OPENAI_REASONING_ENDPOINT ?? "").replace(/\/+$/, "");
+    this.apiKey = env.AZURE_OPENAI_API_KEY ?? env.AZURE_OPENAI_REASONING_API_KEY ?? "";
+    this.apiVersion = env.AZURE_OPENAI_API_VERSION ?? env.AZURE_OPENAI_REASONING_API_VERSION ?? "2024-08-01-preview";
+    this.deployment = env.AZURE_OPENAI_DEPLOYMENT || env.AZURE_OPENAI_REASONING_DEPLOYMENT || "gpt-4o-mini";
     this.enabled = (env.BOT_AI_ENABLED ?? "false").toLowerCase() === "true";
-    this.configured = !!this.realtimeEndpoint && !!this.realtimeApiKey;
-    this.reasoningEnabled = (env.BOT_REASONING_ENABLED ?? "true").toLowerCase() === "true";
-    this.reasoningConfigured = !!this.reasoningEndpoint && !!this.reasoningApiKey;
+    this.configured = !!this.endpoint && !!this.apiKey;
     this.maxPerRoom = clampInt(Number(env.BOT_MAX_PER_ROOM ?? 20), 0, 20, 20);
     this.participation = env.BOT_DEFAULT_PARTICIPATION || "normal";
     this.audioEnabled = (env.BOT_AUDIO_ENABLED ?? "false").toLowerCase() === "true";
-    this.maxReasoningTokens = clampInt(Number(env.BOT_MAX_REASONING_TOKENS ?? 1200), 120, 4000, 1200);
+    this.maxOutputTokens = clampInt(Number(env.BOT_MAX_OUTPUT_TOKENS ?? env.BOT_MAX_REASONING_TOKENS ?? 1200), 120, 4000, 1200);
     this.responseStyle = env.BOT_RESPONSE_STYLE || "advanced";
     this.personalityVariation = (env.BOT_PERSONALITY_VARIATION ?? "true").toLowerCase() === "true";
     this.autoSpeakEnabled = (env.BOT_AUTO_SPEAK_ENABLED ?? "true").toLowerCase() === "true";
@@ -155,33 +113,18 @@ export class BotRealtimeAIService {
   }
 
   async decide(context: BotAIContext, participation = this.participation): Promise<BotDecision | undefined> {
-    if (!this.enabled || (!this.reasoningConfigured && !this.configured)) return undefined;
-    const layer = this.reasoningEnabled && this.reasoningConfigured ? "reasoning" : "realtime";
-    const deployment = layer === "reasoning" ? this.reasoningDeployment : this.realtimeDeployment;
-    console.log(`[BotAI] Bot ${context.botName} phase=${context.phase} called ${layer} deployment=${deployment}`);
-    try {
-      const content = layer === "reasoning"
-        ? await this.requestReasoningDecision(context, participation)
-        : await this.requestRealtimeDecision(context, participation);
-      if (!content) return undefined;
-      return parseDecision(content);
-    } catch (error) {
-      console.error("[BotAI] Azure error:", error instanceof Error ? error.message : error);
-      return undefined;
-    }
-  }
-
-  private async requestReasoningDecision(context: BotAIContext, participation: string): Promise<string | undefined> {
+    if (!this.enabled || !this.configured) return undefined;
+    console.log(`[BotAI] Bot ${context.botName} phase=${context.phase} deployment=${this.deployment}`);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const endpoint = new URL(this.reasoningEndpoint);
-      endpoint.pathname = `/openai/deployments/${encodeURIComponent(this.reasoningDeployment)}/chat/completions`;
-      endpoint.searchParams.set("api-version", this.reasoningApiVersion);
+      const endpoint = new URL(this.endpoint);
+      endpoint.pathname = `/openai/deployments/${encodeURIComponent(this.deployment)}/chat/completions`;
+      endpoint.searchParams.set("api-version", this.apiVersion);
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
-          "api-key": this.reasoningApiKey,
+          "api-key": this.apiKey,
           "content-type": "application/json"
         },
         body: JSON.stringify({
@@ -190,107 +133,20 @@ export class BotRealtimeAIService {
             { role: "user", content: JSON.stringify({ ...context, responseStyle: this.responseStyle, personalityVariation: this.personalityVariation }) }
           ],
           temperature: this.temperature(participation),
-          max_tokens: this.maxReasoningTokens
+          max_tokens: this.maxOutputTokens
         }),
         signal: controller.signal
       });
-      if (!response.ok) throw new Error(`Reasoning HTTP ${response.status}: ${await response.text()}`);
+      if (!response.ok) throw new Error(`Azure OpenAI HTTP ${response.status}: ${await response.text()}`);
       const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-      return data.choices?.[0]?.message?.content?.trim();
+      const content = data.choices?.[0]?.message?.content?.trim();
+      return content ? parseDecision(content) : undefined;
+    } catch (error) {
+      console.error("[BotAI] Azure error:", error instanceof Error ? error.message : error);
+      return undefined;
     } finally {
       clearTimeout(timeout);
     }
-  }
-
-  private async requestRealtimeDecision(context: BotAIContext, participation: string): Promise<string | undefined> {
-    const urls = this.realtimeUrls();
-    let lastError: unknown;
-    for (const url of urls) {
-      try {
-        return await this.requestRealtimeUrl(url, context, participation);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    if (lastError) throw lastError;
-    return undefined;
-  }
-
-  private requestRealtimeUrl(url: string, context: BotAIContext, participation: string): Promise<string | undefined> {
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocket(url, { headers: { "api-key": this.realtimeApiKey } });
-      const chunks: string[] = [];
-      let settled = false;
-      const timeout = setTimeout(() => finish(undefined, new Error(`Realtime timeout after ${this.timeoutMs}ms`)), this.timeoutMs);
-      const finish = (value?: string, error?: Error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        try {
-          ws.close();
-        } catch {
-          // ignore close errors after a settled realtime request
-        }
-        if (error) reject(error);
-        else resolve(value);
-      };
-
-      ws.on("open", () => {
-        ws.send(JSON.stringify({
-          type: "session.update",
-          session: {
-            modalities: ["text"],
-            instructions: this.systemPrompt(),
-            temperature: this.temperature(participation)
-          }
-        }));
-        ws.send(JSON.stringify({
-          type: "conversation.item.create",
-          item: {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: JSON.stringify(context) }]
-          }
-        }));
-        ws.send(JSON.stringify({
-          type: "response.create",
-          response: {
-            modalities: ["text"],
-            instructions: "Retourne uniquement l'objet JSON d'action, sans Markdown ni texte autour.",
-            max_output_tokens: 240
-          }
-        }));
-      });
-
-      ws.on("message", (raw) => {
-        const message = parseRealtimeMessage(raw.toString());
-        if (!message) return;
-        if (message.type === "error") return finish(undefined, new Error(message.error?.message ?? "Realtime error"));
-        if (message.type?.startsWith("response.") && message.delta) chunks.push(message.delta);
-        if (message.type?.startsWith("response.") && message.text) chunks.push(message.text);
-        if (message.response?.status === "failed") return finish(undefined, new Error(message.response.status_details?.error?.message ?? "Realtime response failed"));
-        if (message.type === "response.done") return finish(responseText(message) || chunks.join("").trim());
-      });
-
-      ws.on("error", (error) => finish(undefined, error instanceof Error ? error : new Error(String(error))));
-      ws.on("close", () => {
-        if (!settled && chunks.length) finish(chunks.join("").trim());
-        else if (!settled) finish(undefined, new Error("Realtime socket closed before response"));
-      });
-    });
-  }
-
-  private realtimeUrls() {
-    const endpoint = new URL(this.realtimeEndpoint);
-    endpoint.protocol = endpoint.protocol === "http:" ? "ws:" : "wss:";
-    const preview = new URL(endpoint.toString());
-    preview.pathname = "/openai/realtime";
-    preview.searchParams.set("api-version", this.realtimeApiVersion);
-    preview.searchParams.set("deployment", this.realtimeDeployment);
-    const ga = new URL(endpoint.toString());
-    ga.pathname = "/openai/v1/realtime";
-    ga.searchParams.set("model", this.realtimeDeployment);
-    return this.realtimeApiVersion.includes("preview") ? [preview.toString(), ga.toString()] : [ga.toString(), preview.toString()];
   }
 
   private temperature(participation: string) {
@@ -319,28 +175,9 @@ export class BotRealtimeAIService {
   }
 
   private logStartup() {
-    console.log(`[BotAI] enabled=${this.enabled} realtimeConfigured=${this.configured} reasoningConfigured=${this.reasoningConfigured} audio=${this.audioEnabled} realtimeDeployment=${this.realtimeDeployment} reasoningDeployment=${this.reasoningDeployment}`);
-    console.log(`[BotAI] realtimeEndpoint=${this.realtimeEndpoint ? "present" : "absent"} realtimeApiKey=${this.realtimeApiKey ? "present" : "absent"} realtimeApiVersion=${this.realtimeApiVersion}`);
-    console.log(`[BotAI] reasoningEndpoint=${this.reasoningEndpoint ? "present" : "absent"} reasoningApiKey=${this.reasoningApiKey ? "present" : "absent"} reasoningApiVersion=${this.reasoningApiVersion}`);
-    console.log(`[BotAI] transcriptionEndpoint=${this.transcriptionEndpoint ? "present" : "absent"} transcriptionApiKey=${this.transcriptionApiKey ? "present" : "absent"} transcriptionDeployment=${this.transcriptionDeployment || "absent"} transcriptionApiVersion=${this.transcriptionApiVersion}`);
+    console.log(`[BotAI] enabled=${this.enabled} configured=${this.configured} deployment=${this.deployment} endpoint=${this.endpoint ? "present" : "absent"} apiKey=${this.apiKey ? "present" : "absent"} apiVersion=${this.apiVersion}`);
     console.log(`[BotAI] voices variation=${this.voiceVariationEnabled} default=${this.defaultVoice} available=${this.availableVoices.join(",")}`);
   }
-}
-
-function parseRealtimeMessage(raw: string): RealtimeMessage | undefined {
-  try {
-    return JSON.parse(raw) as RealtimeMessage;
-  } catch {
-    return undefined;
-  }
-}
-
-function responseText(message: RealtimeMessage) {
-  const values: string[] = [];
-  for (const output of message.response?.output ?? []) {
-    if (output.content) values.push(...output.content.flatMap((item) => item.text ?? item.transcript ?? []));
-  }
-  return values.join("").trim();
 }
 
 function parseDecision(content: string): BotDecision | undefined {

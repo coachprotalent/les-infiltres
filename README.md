@@ -235,7 +235,7 @@ Le frontend n'utilise pas de variable Vite actuellement. En production, il se co
 
 Les bots IA sont des joueurs serveur. Ils comptent dans le nombre de joueurs, reçoivent un rôle normal, peuvent être nommés, voter, être élus Maire, agir la nuit et écrire dans le chat visible. Ils ne disposent pas de socket navigateur et toutes leurs actions sont validées par le moteur de jeu avant application.
 
-Le service dédié est `BotRealtimeAIService`. Il centralise la communication Azure OpenAI realtime, la génération des messages et actions JSON, les logs Azure, le filtrage anti-triche du contexte, et gardera l'intégration audio temps réel future.
+Le service dédié est `BotAIService` (Azure OpenAI, chat completions). Il centralise la génération des messages et actions JSON, les logs Azure et le filtrage anti-triche du contexte. Si l'IA est désactivée ou indisponible, les bots utilisent leurs personnalités hors-ligne (`botPersonas`) afin de rester distincts.
 
 `AZURE_OPENAI_REALTIME_DEPLOYMENT=gpt-realtime-1.5` est le déploiement principal utilisé par les bots. Ne configurez pas `AZURE_OPENAI_DEPLOYMENT=botintelligence` pour les bots si ce déploiement n'existe pas ou n'est pas réellement utilisé.
 
@@ -289,7 +289,7 @@ Sécurité anti-triche :
 
 - La clé Azure reste uniquement dans le backend.
 - Le frontend ne reçoit jamais la clé, ni le prompt système.
-- Le service `BotRealtimeAIService` ne reçoit jamais l'objet room complet.
+- Le service `BotAIService` ne reçoit jamais l'objet room complet.
 - Le contexte envoyé au modèle est limité à `botName`, `botRole`, `phase`, `publicEvents`, `visibleMessages`, `alivePlayers`, `nominatedPlayers`, `currentVoteState`, `privateRoleInfo` et `allowedActions`.
 - Les rôles secrets des autres joueurs, l'état complet de la room, les actions privées invisibles et les votes cachés non autorisés ne sont pas envoyés.
 - Le modèle retourne uniquement une action JSON structurée (`speak`, `vote`, `nominate`, `nightAction`, etc.).
